@@ -127,8 +127,6 @@ pip install -r backend/requirements.txt
 # 使用自动重载运行
 python -m uvicorn backend.app.main:api --reload --host 127.0.0.1 --port 8787
 
-# 访问 API 文档
-# http://127.0.0.1:8787/docs
 ```
 
 ### 桌面端开发
