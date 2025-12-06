@@ -150,38 +150,6 @@ npm run dist
 
 ## 📝 API 端点
 
-### 检测
-- `POST /api/detect` - 检测 AI 生成的文本
-- `POST /api/detect/batch` - 批量检测
-
-### 配置
-- `GET /api/config` - 获取当前配置
-- `PUT /api/config` - 更新配置
-- `PATCH /api/config` - 部分更新
-- `GET /api/config/versions` - 列出配置版本
-- `POST /api/config/rollback` - 回滚到之前的版本
-
-### 历史记录
-- `GET /api/history` - 列出检测历史
-- `POST /api/history` - 保存检测结果
-
-### 健康检查
-- `GET /api/health` - 健康检查端点
-
-## 🧪 测试
-
-测试文件位于 `backend/tests/` 和 `desktop/tests/`：
-
-```bash
-# 运行后端测试
-python -m pytest backend/tests/
-
-# 运行特定测试
-python -m pytest backend/tests/test_paragraph_blocks.py
-```
-
-## 🎨 UI 功能
-
 - 自定义无边框窗口设计
 - 拖放文件上传（PDF、DOCX、TXT）
 - 实时检测结果
