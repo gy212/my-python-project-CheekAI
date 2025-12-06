@@ -1,0 +1,42 @@
+{
+  "name": "cheekai-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ && electron .",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.cheekai.app",
+    "productName": "CheekAI",
+    "directories": {
+      "output": "dist_final"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CheekAI"
+    },
+    "extraResources": [
+      {
+        "from": "resources/backend",
+        "to": "backend"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "keytar": "^7.9.0",
+    "electron-store": "^9.0.0"
+  }
+}
