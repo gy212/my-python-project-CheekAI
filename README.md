@@ -7,7 +7,7 @@ CheekAI 是一个 AI 生成文本检测桌面应用，采用 FastAPI 后端和 E
 **后端 (Python/FastAPI)**
 - FastAPI Web 服务，用于 AI 文本检测
 - 文档预处理（支持 PDF、DOCX）
-- 多 AI 提供商集成
+- 多 AI 提供商集成（当前支持 GLM API，后续计划兼容其他 API 格式）
 - 配置管理及版本控制
 - 历史记录跟踪系统
 
