@@ -40,26 +40,6 @@ pip install -r backend/requirements.txt
 python start.py
 ```
 
-这将会：
-- 自动启动 FastAPI 后端在 `http://127.0.0.1:8787`
-- 如有需要会自动安装桌面端依赖
-- 启动 Electron 桌面应用
-- 管理后端进程生命周期
-
-### 备选方案：手动启动
-
-**仅启动后端：**
-```bash
-python -m uvicorn backend.app.main:api --host 127.0.0.1 --port 8787
-```
-
-**仅启动桌面端：**
-```bash
-cd desktop
-npm install  # 仅首次需要
-npm run start
-```
-
 ## 📁 项目结构
 
 ```
@@ -127,8 +107,6 @@ pip install -r backend/requirements.txt
 # 使用自动重载运行
 python -m uvicorn backend.app.main:api --reload --host 127.0.0.1 --port 8787
 
-# 访问 API 文档
-# http://127.0.0.1:8787/docs
 ```
 
 ### 桌面端开发
