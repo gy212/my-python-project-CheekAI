@@ -96,6 +96,8 @@ src-tauri/logs/
 # Rust
 target/
 src-tauri/target/
+.cargo-target*/
+build/cargo-target/
 src-tauri/target-*/
 
 # Runtime data

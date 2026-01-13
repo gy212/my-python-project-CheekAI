@@ -29,10 +29,19 @@ export function useProviders() {
       
       if (Array.isArray(data)) {
         for (const provider of data) {
+          // Only expose providers currently supported by detection LLM analyzer.
+          // (Other providers can still be configured/tested in Settings.)
+          if (!["gemini", "glm", "deepseek"].includes(provider.name)) {
+            continue;
+          }
+
           // Each provider can have multiple models
-          const models = provider.name === "glm" 
-            ? ["glm-4-plus", "glm-4.6", "glm-4-flash"] 
-            : ["deepseek-chat", "deepseek-reasoner"];
+          const models =
+            provider.name === "glm"
+              ? ["glm-4-plus", "glm-4.6", "glm-4-flash"]
+              : provider.name === "deepseek"
+                ? ["deepseek-chat", "deepseek-reasoner"]
+                : ["gemini-3-pro-preview"];
           
           for (const model of models) {
             list.push({

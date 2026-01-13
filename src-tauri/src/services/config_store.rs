@@ -213,7 +213,7 @@ mod tests {
     fn test_config_serialization() {
         let config = AppConfig {
             version: "1.0.0".to_string(),
-            default_provider: Some("glm".to_string()),
+            default_provider: Some("gemini".to_string()),
             proxy: None,
             detection: DetectionConfig::default(),
             providers: HashMap::new(),

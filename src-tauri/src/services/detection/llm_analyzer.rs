@@ -106,6 +106,10 @@ async fn call_llm_for_segment(
         client
             .call_deepseek_json(model, api_key, DETECTION_SYSTEM_PROMPT, &user_prompt, 512)
             .await
+    } else if provider_name == "gemini" {
+        client
+            .call_gemini(model, api_key, DETECTION_SYSTEM_PROMPT, &user_prompt, 512)
+            .await
     } else {
         client
             .call_glm(
@@ -597,15 +601,27 @@ pub async fn build_segments_with_llm(
     // Get provider info and API key
     let provider_info = if let Some(p) = provider {
         let spec = parse_provider(p);
+        let model = if spec.model.trim().is_empty() {
+            match spec.name.as_str() {
+                "gemini" => "gemini-3-pro-preview".to_string(),
+                "glm" => "glm-4-flash".to_string(),
+                "deepseek" => "deepseek-chat".to_string(),
+                _ => spec.model,
+            }
+        } else {
+            spec.model
+        };
         let key = get_api_key(&spec.name);
         if let Some(k) = key {
-            Some((spec.name, spec.model, k))
+            Some((spec.name, model, k))
         } else {
             None
         }
     } else {
-        // Try GLM first, then DeepSeek
-        if let Some(key) = get_api_key("glm") {
+        // Try Gemini first, then GLM, then DeepSeek
+        if let Some(key) = get_api_key("gemini") {
+            Some(("gemini".to_string(), "gemini-3-pro-preview".to_string(), key))
+        } else if let Some(key) = get_api_key("glm") {
             Some(("glm".to_string(), "glm-4-flash".to_string(), key))
         } else if let Some(key) = get_api_key("deepseek") {
             Some(("deepseek".to_string(), "deepseek-chat".to_string(), key))
