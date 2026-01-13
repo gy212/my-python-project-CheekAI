@@ -1,0 +1,240 @@
+/* CheekAI Design Tokens / CSS Variables */
+
+:root {
+  /* Spacing */
+  --space: 16px;
+
+  /* Border Radius */
+  --radius-card: 12px;
+  --radius-pill: 8px;
+  --radius-sm: 6px;
+
+  /* Font Sizes */
+  --font-xs: 12px;
+  --font-sm: 14px;
+  --font-base: 16px;
+  --font-lg: 20px;
+  --font-xl: 28px;
+
+  /* Happy Hues Palette - Deep Green/Vintage */
+  --bg-app: #004643;
+  --bg-card: #004643;
+  --bg-surface: #e8e4e6;
+  --bg-input: #ffffff;
+
+  --text-main: #fffffe;
+  --text-muted: #abd1c6;
+  --text-dark: #001e1d;
+
+  /* Text colors specifically for light surfaces */
+  --text-surface-main: #001e1d;
+  --text-surface-muted: #5f6c7b;
+
+  --primary: #f9bc60;
+  --primary-hover: #f7b04a;
+  --secondary: #abd1c6;
+  --accent: #e16162;
+  --success: #22c55e;
+  --warning: #eab308;
+  --danger: #e16162;
+
+  --border: #abd1c6;
+  --border-dark: #001e1d;
+
+  /* Neo-brutalism shadows */
+  --shadow-sm: 2px 2px 0px var(--border-dark);
+  --shadow-md: 3px 3px 0px var(--border-dark);
+  --shadow-lg: 4px 4px 0px var(--border-dark);
+  --shadow-xl: 5px 5px 0px var(--border-dark);
+
+  /* Transitions */
+  --transition-fast: 100ms ease;
+  --transition-normal: 150ms ease;
+  --transition-slow: 200ms ease;
+}
+
+/* Global Reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Noto Sans SC", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-app);
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text-main);
+  letter-spacing: 0.2px;
+  line-height: 1.5;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--secondary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* Surface card base styles */
+.surface {
+  border-radius: var(--radius-card);
+  background: var(--bg-surface);
+  color: var(--text-surface-main);
+  border: 2px solid var(--border-dark);
+  box-shadow: var(--shadow-lg);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.surface:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: var(--shadow-xl);
+}
+
+.surface .eyebrow {
+  color: var(--accent);
+}
+
+/* Eyebrow text style */
+.eyebrow {
+  text-transform: uppercase;
+  font-size: var(--font-xs);
+  letter-spacing: 0.15em;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 0;
+}
+
+/* Button base styles */
+.btn-primary,
+.btn-secondary {
+  height: 44px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--border-dark);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 20px;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--text-dark);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-primary:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-xl);
+  background: var(--primary-hover);
+}
+
+.btn-primary:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0px var(--border-dark);
+}
+
+.btn-primary:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.btn-secondary {
+  background: var(--secondary);
+  color: var(--text-dark);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-secondary:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-xl);
+  filter: brightness(1.05);
+}
+
+.btn-secondary:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0px var(--border-dark);
+}
+
+.btn-secondary:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Input control base styles */
+.input-control {
+  width: 100%;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border-dark);
+  padding: 10px 14px;
+  font-size: var(--font-base);
+  font-weight: 500;
+  background: var(--bg-input);
+  color: var(--text-dark);
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-md);
+}
+
+.input-control:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: var(--shadow-lg);
+}
+
+.input-control:focus {
+  outline: none;
+  border-color: var(--primary);
+  transform: translate(-1px, -1px);
+  box-shadow: var(--shadow-lg);
+}
+
+.input-control::placeholder {
+  color: var(--text-surface-muted);
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Responsive breakpoints */
+@media (max-width: 1280px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .content-grid {
+    padding: 24px;
+  }
+
+  .card-heading {
+    flex-direction: column;
+  }
+}

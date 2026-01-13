@@ -1,27 +1,29 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `backend/`: FastAPI service logic, segmentation heuristics, config store, and schemas. Tests live under `backend/tests/*.py`, with fixtures and paragraph block checks covering key preprocess helpers.
-- `desktop/`: Electron shell plus renderer assets (`renderer/index.js`, `style.css`, `index.html`) and preload/main entry points. `scripts/` and `samples/` provide auxiliary data and helpers (e.g., `scripts/verify_paragraphs.py`, `samples/test_paragraphs.txt`).
-- `docs/` contains human-facing notes (UI spec). `start.py` orchestrates backend+desktop startup, and config metadata lives in `backend/config/api_config.json`.
+- `src-tauri/`: Rust backend with Tauri integration. Core detection logic lives in `src/services/detection/` (split into segment_builder, aggregation, comparison, dual_mode, llm_analyzer). AI providers in `src/services/providers.rs`, text processing in `src/services/text_processor.rs`.
+- `src/`: Vue 3 + TypeScript frontend. Components in `src/components/` (TitleBar, ControlPanel, TextInput, ResultsPanel, SettingsModal, LoadingMask). Composables in `src/composables/` (useDetection, useProviders, useFileHandler, useWindow). Types in `src/types/`.
+- `legacy-python-electron/`: Archived Python/FastAPI + Electron code for reference.
 
 ## Build, Test, and Development Commands
-- `python start.py`: launches backend (uvicorn) and desktop (npm run start or bundled electron) together, installing desktop dependencies on demand.
-- `python -m pip install -r backend/requirements.txt`: installs Python deps for FastAPI, stylometry, file parsing, and multipart handling.
-- `python -m pytest backend/tests/test_paragraph_blocks.py`: runs the paragraph block suite. Use this target when validating preprocessing behavior after changes.
-- Electron-specific work: `cd desktop && npm install` then `npm run start`. These commands are triggered automatically by `start.py` if electron packages are missing.
+- `npm run tauri dev`: Development mode with hot reload for both frontend and backend.
+- `npm run tauri build`: Build production installer.
+- `cd src-tauri && cargo check`: Check Rust code for errors.
+- `cd src-tauri && cargo test`: Run Rust unit tests.
+- `npm run build`: Build frontend only.
 
 ## Coding Style & Naming Conventions
-- Python follows standard 4-space indentation, snake_case for functions/variables, CamelCase for Pydantic models, and module names matching functionality (e.g., `backend/app/service.py`).
-- JavaScript/renderer follows modern ES modules, prefers `const`/`let`, and keeps DOM queries at top of `renderer/index.js`. Keep translations/labels in place to match UI (Chinese strings).
-- No formal linting tool is configured; rely on descriptive function/variable names and consistent spacing. Keep commits small and diff-friendly.
+- Rust follows 4-space indentation, snake_case for functions/variables, CamelCase for structs, module names matching functionality (e.g., `segment_builder.rs`, `dual_mode.rs`).
+- TypeScript/Vue follows camelCase for functions/variables, PascalCase for components and types. Composables use `use*` prefix.
+- UI strings are in Chinese - preserve when editing.
+- Each file should have a single responsibility. Split large files into focused modules.
 
 ## Testing Guidelines
-- Tests live under `backend/tests/`. Naming uses `test_*` functions and `pytest` fixtures for isolated units (e.g., `test_paragraph_blocks.py` reflects the block builder’s heuristics).
-- Run `python -m pytest backend/tests/test_paragraph_blocks.py` after any change to paragraph segmentation logic or preprocess helpers.
-- If adding new backend features that interact with segmentation or config storage, add targeted pytest cases in the same directory. Keep tests concise and deterministic.
+- Rust tests live alongside code using `#[cfg(test)]` modules.
+- Run `cargo test` in `src-tauri/` after changes to detection or service logic.
+- Keep tests concise and deterministic.
 
 ## Commit & Pull Request Guidelines
-- Commit messages should describe the change succinctly (e.g., “Fix heading merging in block builder” or “Add python-multipart dependency”). Use present-tense verbs and reference relevant files.
-- PRs should include: purpose overview, impacted areas (backend, renderer, config), and mention any required manual steps (npm install, pip install). Attach screenshots only if UI changes are visible.
-- For config/API updates, describe how to regenerate `backend/config/api_config.json` (via UI or API) and any needed migrations.
+- Commit messages should describe the change succinctly (e.g., "Split detection.rs into modular files" or "Add useProviders composable"). Use present-tense verbs.
+- PRs should include: purpose overview, impacted areas (backend/frontend), and any breaking changes.
+- For Tauri command changes, update both Rust handlers and TypeScript invoke calls.

@@ -1,0 +1,15 @@
+# Text Segmenter Service Dependencies
+# 安装命令: pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 分句
+spacy>=3.5.0
+
+# 分段 (话题分割)
+wtpsplit>=2.0.0
+
+# 安装 spaCy 中文模型 (安装后运行):
+# python -m spacy download zh_core_web_sm
+# python -m spacy download en_core_web_sm
+
+# 注意: Windows 上安装 wtpsplit 可能需要先设置:
+# $env:PYTHONUTF8=1

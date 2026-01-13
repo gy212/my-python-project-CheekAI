@@ -91,6 +91,12 @@ desktop/.npmrc
 logs/
 *.log
 backend/logs/
+src-tauri/logs/
+
+# Rust
+target/
+src-tauri/target/
+src-tauri/target-*/
 
 # Runtime data
 pids
@@ -199,6 +205,11 @@ temp/
 # Claude AI
 .claude/
 
+# Local notes / tooling
+.qoder/
+api
+api.*
+
 # Corrupted/temp directories
 DPythonProject*/
 
@@ -228,3 +239,15 @@ desktop/resources/
 # Package manager lock files (optional - uncomment if you want to ignore lock files)
 # package-lock.json
 # desktop/package-lock.json
+
+# Legacy Python services (already moved to legacy-python-electron/)
+/services/
+
+# Archived legacy app artifacts (keep sources, ignore build outputs)
+legacy-python-electron/backend/config/versions/
+legacy-python-electron/backend/logs/
+legacy-python-electron/backend/config/api_config.json
+legacy-python-electron/desktop/dist/
+legacy-python-electron/desktop/dist_final/
+legacy-python-electron/desktop/out/
+legacy-python-electron/desktop/resources/
