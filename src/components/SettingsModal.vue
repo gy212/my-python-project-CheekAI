@@ -29,6 +29,35 @@ const openaiTestResult = ref("");
 const geminiTestResult = ref("");
 const testing = ref({ glm: false, deepseek: false, anthropic: false, openai: false, gemini: false });
 
+type GptConcurrencyBenchmarkResult = {
+  provider: string;
+  model: string;
+  concurrency: number;
+  fileName: string;
+  extractedChars: number;
+  promptChars: number;
+  totalMs: number;
+  success: number;
+  failed: number;
+  minMs?: number;
+  avgMs?: number;
+  maxMs?: number;
+  runs: Array<{
+    index: number;
+    ok: boolean;
+    latencyMs?: number;
+    preview?: string;
+    error?: string;
+  }>;
+};
+
+const openaiBenchmarkFileInput = ref<HTMLInputElement | null>(null);
+const openaiBenchmarkFile = ref<File | null>(null);
+const openaiBenchmarkFileName = ref("未选择文件");
+const openaiBenchmarkRunning = ref(false);
+const openaiBenchmarkResult = ref<GptConcurrencyBenchmarkResult | null>(null);
+const openaiBenchmarkError = ref("");
+
 // Load API key status when modal opens
 watch(() => props.visible, async (visible) => {
   if (visible) {
@@ -273,6 +302,54 @@ async function testGeminiConnection() {
     testing.value.gemini = false;
   }
 }
+
+function triggerOpenaiBenchmarkFileSelect() {
+  openaiBenchmarkFileInput.value?.click();
+}
+
+function handleOpenaiBenchmarkFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0] ?? null;
+  openaiBenchmarkFile.value = file;
+  openaiBenchmarkFileName.value = file ? file.name : "未选择文件";
+  openaiBenchmarkResult.value = null;
+  openaiBenchmarkError.value = "";
+}
+
+async function runOpenaiBenchmark() {
+  if (!openaiStatus.value.configured) {
+    alert("请先配置 OpenAI API Key");
+    return;
+  }
+  if (!openaiBenchmarkFile.value) {
+    alert("请先选择一篇文章（.docx/.pdf/.txt）");
+    return;
+  }
+
+  openaiBenchmarkRunning.value = true;
+  openaiBenchmarkResult.value = null;
+  openaiBenchmarkError.value = "正在并发测试（10并发）...";
+
+  try {
+    const file = openaiBenchmarkFile.value;
+    const arrayBuffer = await file.arrayBuffer();
+    const fileData = Array.from(new Uint8Array(arrayBuffer));
+
+    const result = await invoke("benchmark_gpt_concurrency", {
+      fileName: file.name,
+      fileData,
+      concurrency: 10,
+    }) as GptConcurrencyBenchmarkResult;
+
+    openaiBenchmarkResult.value = result;
+    openaiBenchmarkError.value = "";
+  } catch (err: any) {
+    openaiBenchmarkError.value = typeof err === "string" ? err : (err.message || JSON.stringify(err));
+  } finally {
+    openaiBenchmarkRunning.value = false;
+  }
+}
+
 </script>
 
 <template>
@@ -379,6 +456,39 @@ async function testGeminiConnection() {
             <div class="input-inline">
               <input class="input-control" placeholder="输入新的 API Key..." v-model="openaiKey" type="password" />
               <button class="btn-secondary" type="button" @click="saveOpenaiKey">保存</button>
+            </div>
+
+            <div class="benchmark-box">
+              <div class="key-status">
+                <input
+                  ref="openaiBenchmarkFileInput"
+                  class="hidden-file-input"
+                  type="file"
+                  accept=".docx,.pdf,.txt"
+                  @change="handleOpenaiBenchmarkFileSelect"
+                />
+                <button class="btn-test" type="button" @click="triggerOpenaiBenchmarkFileSelect">
+                  选择文章
+                </button>
+                <span class="benchmark-file">{{ openaiBenchmarkFileName }}</span>
+                <button
+                  class="btn-test"
+                  type="button"
+                  @click="runOpenaiBenchmark"
+                  :disabled="openaiBenchmarkRunning || !openaiStatus.configured"
+                >
+                  {{ openaiBenchmarkRunning ? "并发测试中..." : "并发测试（10）" }}
+                </button>
+              </div>
+
+              <div v-if="openaiBenchmarkError" class="test-result test-error">
+                {{ openaiBenchmarkError }}
+              </div>
+
+              <div v-if="openaiBenchmarkResult" class="test-result test-success">
+                总耗时 {{ openaiBenchmarkResult.totalMs }}ms｜成功 {{ openaiBenchmarkResult.success }}/{{ openaiBenchmarkResult.concurrency }}｜
+                min/avg/max {{ openaiBenchmarkResult.minMs ?? '-' }}/{{ openaiBenchmarkResult.avgMs?.toFixed(1) ?? '-' }}/{{ openaiBenchmarkResult.maxMs ?? '-' }}ms
+              </div>
             </div>
           </div>
 
@@ -554,6 +664,24 @@ async function testGeminiConnection() {
   gap: 8px;
   margin-bottom: 8px;
   flex-wrap: wrap;
+}
+
+.benchmark-box {
+  margin-top: 10px;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.benchmark-file {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+  color: var(--text-dark);
+  opacity: 0.8;
 }
 
 .status-badge {

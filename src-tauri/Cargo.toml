@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "AI-generated text detection desktop application"
 authors = ["CheekAI Team"]
 edition = "2021"
+default-run = "cheekAI"
 
 [lib]
 name = "cheek_ai_lib"

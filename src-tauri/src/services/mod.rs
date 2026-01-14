@@ -24,4 +24,9 @@ pub use detection::{
     dual_mode_detect,
     dual_mode_detect_with_llm,
     build_segments_with_llm,
+    build_segments_with_llm_progress,
+    filter_paragraphs,
+    FilterSummary,
+    ParagraphCategory,
+    ParagraphClassification,
 };

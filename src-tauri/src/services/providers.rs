@@ -14,6 +14,34 @@ const ANTHROPIC_DEFAULT_URL: &str = "https://crs.itssx.com/api/v1/messages";
 const OPENAI_RESPONSES_URL: &str = "https://ai.itssx.com/openai/responses";
 const GEMINI_DEFAULT_URL: &str = "https://ai.itssx.com/api/v1/chat/completions";
 
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.2";
+pub const OPENAI_DEFAULT_MAX_OUTPUT_TOKENS: i32 = 8192;
+
+fn clean_api_key(raw: &str) -> String {
+    let mut s = raw.trim();
+
+    // Trim wrapping quotes often introduced by copy/paste or JSON.
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        if s.len() >= 2 {
+            s = &s[1..s.len() - 1];
+        }
+    }
+
+    // Users sometimes paste full `Authorization: Bearer ...` values.
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("bearer ") {
+        // Slice the original by byte index 7.
+        s = s.get(7..).unwrap_or(s);
+    }
+
+    s.trim().to_string()
+}
+
+fn is_official_anthropic_url(url: &str) -> bool {
+    // Keep this intentionally simple to avoid pulling in a URL parsing dependency.
+    url.contains("api.anthropic.com")
+}
+
 #[derive(Error, Debug)]
 pub enum ProviderError {
     #[error("HTTP request failed: {0}")]
@@ -120,7 +148,7 @@ impl Default for ProviderClient {
 impl ProviderClient {
     pub fn new() -> Self {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(80))
+            .timeout(std::time::Duration::from_secs(180))
             .build()
             .unwrap_or_default();
 
@@ -146,7 +174,7 @@ impl ProviderClient {
     pub fn with_proxy(proxy_url: &str) -> Result<Self, ProviderError> {
         let proxy = reqwest::Proxy::all(proxy_url)?;
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(80))
+            .timeout(std::time::Duration::from_secs(180))
             .proxy(proxy)
             .build()?;
 
@@ -178,8 +206,31 @@ impl ProviderClient {
         max_tokens: i32,
         enable_reasoning: bool,
     ) -> Result<ChatResult, ProviderError> {
+        self.call_glm_with_url(
+            None,
+            model,
+            api_key,
+            system,
+            user,
+            max_tokens,
+            enable_reasoning,
+        )
+        .await
+    }
+
+    pub async fn call_glm_with_url(
+        &self,
+        custom_url: Option<&str>,
+        model: &str,
+        api_key: &str,
+        system: &str,
+        user: &str,
+        max_tokens: i32,
+        enable_reasoning: bool,
+    ) -> Result<ChatResult, ProviderError> {
+        let url = custom_url.unwrap_or(&self.glm_url);
         self.call_chat_api(
-            &self.glm_url,
+            url,
             model,
             api_key,
             system,
@@ -200,8 +251,29 @@ impl ProviderClient {
         user: &str,
         max_tokens: i32,
     ) -> Result<ChatResult, ProviderError> {
+        self.call_deepseek_with_url(
+            None,
+            model,
+            api_key,
+            system,
+            user,
+            max_tokens,
+        )
+        .await
+    }
+    
+    pub async fn call_deepseek_with_url(
+        &self,
+        custom_url: Option<&str>,
+        model: &str,
+        api_key: &str,
+        system: &str,
+        user: &str,
+        max_tokens: i32,
+    ) -> Result<ChatResult, ProviderError> {
+        let url = custom_url.unwrap_or(&self.deepseek_url);
         self.call_chat_api(
-            &self.deepseek_url,
+            url,
             model,
             api_key,
             system,
@@ -213,7 +285,7 @@ impl ProviderClient {
         )
         .await
     }
-    
+
     /// Call DeepSeek with JSON response format (prompt must contain 'json')
     pub async fn call_deepseek_json(
         &self,
@@ -223,8 +295,29 @@ impl ProviderClient {
         user: &str,
         max_tokens: i32,
     ) -> Result<ChatResult, ProviderError> {
+        self.call_deepseek_json_with_url(
+            None,
+            model,
+            api_key,
+            system,
+            user,
+            max_tokens,
+        )
+        .await
+    }
+
+    pub async fn call_deepseek_json_with_url(
+        &self,
+        custom_url: Option<&str>,
+        model: &str,
+        api_key: &str,
+        system: &str,
+        user: &str,
+        max_tokens: i32,
+    ) -> Result<ChatResult, ProviderError> {
+        let url = custom_url.unwrap_or(&self.deepseek_url);
         self.call_chat_api(
-            &self.deepseek_url,
+            url,
             model,
             api_key,
             system,
@@ -247,6 +340,17 @@ impl ProviderClient {
             .await
     }
 
+    pub async fn call_openai_responses_with_url(
+        &self,
+        custom_url: Option<&str>,
+        model: &str,
+        api_key: &str,
+        input: &str,
+    ) -> Result<ChatResult, ProviderError> {
+        let url = custom_url.unwrap_or(&self.openai_responses_url);
+        self.call_openai_responses_api(url, model, api_key, input).await
+    }
+
     pub async fn call_gemini(
         &self,
         model: &str,
@@ -256,6 +360,20 @@ impl ProviderClient {
         max_tokens: i32,
     ) -> Result<ChatResult, ProviderError> {
         self.call_gemini_api(&self.gemini_url, model, api_key, system, user, max_tokens)
+            .await
+    }
+
+    pub async fn call_gemini_with_url(
+        &self,
+        custom_url: Option<&str>,
+        model: &str,
+        api_key: &str,
+        system: &str,
+        user: &str,
+        max_tokens: i32,
+    ) -> Result<ChatResult, ProviderError> {
+        let url = custom_url.unwrap_or(&self.gemini_url);
+        self.call_gemini_api(url, model, api_key, system, user, max_tokens)
             .await
     }
 
@@ -328,16 +446,28 @@ impl ProviderClient {
         };
 
         let start = Instant::now();
+        let api_key = clean_api_key(api_key);
 
-        let response = self
+        let mut req = self
             .client
             .post(url)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2024-10-22")
             .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await?;
+            .json(&request);
+
+        // Official Anthropic requires `x-api-key`. Many relays (including the default itssx
+        // endpoint in this repo) expect `Authorization: Bearer ...`.
+        if is_official_anthropic_url(url) {
+            req = req
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2024-10-22");
+        } else {
+            req = req
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2024-10-22");
+        }
+
+        let response = req.send().await?;
 
         let latency_ms = start.elapsed().as_millis() as i64;
         let status = response.status();
@@ -375,12 +505,66 @@ impl ProviderClient {
         api_key: &str,
         input: &str,
     ) -> Result<ChatResult, ProviderError> {
+        fn extract_first_json_object(s: &str) -> Option<&str> {
+            let bytes = s.as_bytes();
+            let mut i = 0usize;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i >= bytes.len() || bytes[i] != b'{' {
+                return None;
+            }
+
+            let mut depth: i32 = 0;
+            let mut in_string = false;
+            let mut escape = false;
+            for (idx, &b) in bytes.iter().enumerate().skip(i) {
+                if in_string {
+                    if escape {
+                        escape = false;
+                        continue;
+                    }
+                    if b == b'\\' {
+                        escape = true;
+                        continue;
+                    }
+                    if b == b'"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+
+                match b {
+                    b'"' => in_string = true,
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return s.get(i..=idx);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        // Some relay providers advertise a "Responses API" endpoint but accept only the structured
+        // `input` format (array of role/content blocks). Use that form for best compatibility.
+        // Be generous with output token budget; gateways may accept either `max_output_tokens`
+        // (Responses API) or `max_tokens` (Chat Completions style).
         let request = serde_json::json!({
             "model": model,
-            "input": input
+            "max_output_tokens": OPENAI_DEFAULT_MAX_OUTPUT_TOKENS,
+            "max_tokens": OPENAI_DEFAULT_MAX_OUTPUT_TOKENS,
+            "input": [{
+                "role": "user",
+                "content": [{ "type": "input_text", "text": input }]
+            }]
         });
 
         let start = Instant::now();
+        let api_key = clean_api_key(api_key);
 
         let response = self
             .client
@@ -403,13 +587,44 @@ impl ProviderClient {
         }
 
         // OpenAI Responses API format: {"output": [{"type": "message", "content": [{"type": "output_text", "text": "..."}]}]}
-        let data: serde_json::Value = response
+        let mut data: serde_json::Value = response
             .json()
             .await
             .map_err(|e| ProviderError::JsonError(e.to_string()))?;
 
-        let content = data["output"][0]["content"][0]["text"]
-            .as_str()
+        // Some relays return a JSON string that itself contains the JSON object, sometimes with
+        // extra SSE lines appended (e.g. `event: error ...`). Parse the first JSON object only.
+        if let Some(s) = data.as_str() {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                data = parsed;
+            } else if let Some(json_obj) = extract_first_json_object(s) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_obj) {
+                    data = parsed;
+                }
+            }
+        }
+
+        let content = data
+            .get("output")
+            .and_then(|o| o.as_array())
+            .and_then(|o| o.first())
+            .and_then(|msg| msg.get("content"))
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.iter().find_map(|part| {
+                part.get("text")
+                    .and_then(|t| t.as_str())
+                    .filter(|t| !t.trim().is_empty())
+            }))
+            // OpenAI Chat Completions style fallback
+            .or_else(|| {
+                data.get("choices")
+                    .and_then(|c| c.as_array())
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.get("content"))
+                    .and_then(|t| t.as_str())
+                    .filter(|t| !t.trim().is_empty())
+            })
             .map(|s| s.to_string())
             .ok_or(ProviderError::MissingContent)?;
 
@@ -443,6 +658,7 @@ impl ProviderClient {
         });
 
         let start = Instant::now();
+        let api_key = clean_api_key(api_key);
 
         let response = self
             .client
@@ -470,8 +686,40 @@ impl ProviderClient {
             .await
             .map_err(|e| ProviderError::JsonError(e.to_string()))?;
 
-        let content = data["response"]["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
+        let content = data
+            .get("response")
+            .and_then(|r| r.get("candidates"))
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|c| c.get("content"))
+            .and_then(|content| {
+                content
+                    .get("parts")
+                    .and_then(|p| p.as_array())
+                    .and_then(|parts| {
+                        parts.iter().find_map(|part| {
+                            part.get("text")
+                                .and_then(|t| t.as_str())
+                                .filter(|t| !t.trim().is_empty())
+                        })
+                    })
+                    .or_else(|| {
+                        content
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .filter(|t| !t.trim().is_empty())
+                    })
+            })
+            // Some gateways return an OpenAI-compatible payload instead of Gemini's `response.*`.
+            .or_else(|| {
+                data.get("choices")
+                    .and_then(|c| c.as_array())
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.get("content"))
+                    .and_then(|t| t.as_str())
+                    .filter(|t| !t.trim().is_empty())
+            })
             .map(|s| s.to_string())
             .ok_or(ProviderError::MissingContent)?;
 
@@ -525,11 +773,12 @@ impl ProviderClient {
         }
 
         let start = Instant::now();
+        let api_key_clean = clean_api_key(api_key);
 
         let response = self
             .client
             .post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {}", api_key_clean))
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -610,9 +859,9 @@ pub fn get_api_key(provider: &str) -> Option<String> {
 
     for key in env_keys {
         if let Ok(val) = env::var(key) {
-            let v = val.trim();
+            let v = clean_api_key(&val);
             if !v.is_empty() {
-                return Some(v.to_string());
+                return Some(v);
             }
         }
     }
@@ -621,7 +870,27 @@ pub fn get_api_key(provider: &str) -> Option<String> {
     if let Some(config_dir) = super::ConfigStore::default_config_dir() {
         let store = super::ConfigStore::new(config_dir);
         if let Ok(Some(key)) = store.get_api_key(provider) {
-            return Some(key);
+            let v = clean_api_key(&key);
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+
+        // Handle common aliases in config keys.
+        if provider == "anthropic" {
+            if let Ok(Some(key)) = store.get_api_key("claude") {
+                let v = clean_api_key(&key);
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
+        } else if provider == "claude" {
+            if let Ok(Some(key)) = store.get_api_key("anthropic") {
+                let v = clean_api_key(&key);
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
         }
     }
 
@@ -647,5 +916,14 @@ mod tests {
     fn test_provider_client_creation() {
         let client = ProviderClient::new();
         assert!(client.glm_url.contains("bigmodel.cn"));
+    }
+
+    #[test]
+    fn test_clean_api_key() {
+        assert_eq!(clean_api_key("  sk-xxx  "), "sk-xxx");
+        assert_eq!(clean_api_key("Bearer sk-xxx"), "sk-xxx");
+        assert_eq!(clean_api_key("bearer sk-xxx"), "sk-xxx");
+        assert_eq!(clean_api_key("\"sk-xxx\""), "sk-xxx");
+        assert_eq!(clean_api_key("'sk-xxx'"), "sk-xxx");
     }
 }

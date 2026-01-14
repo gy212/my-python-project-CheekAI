@@ -21,9 +21,11 @@ const {
   dualMode,
   isLoading,
   loadingText,
+  progress,
   segments,
   aggregation,
   dualResult,
+  filterSummary,
   hasResult,
   overallDecision,
   overallProbability,
@@ -97,6 +99,8 @@ onMounted(() => {
           :hasResult="hasResult"
           :overallProbability="overallProbability"
           :overallDecision="overallDecision"
+          :originalText="inputText"
+          :filterSummary="filterSummary"
           @export-json="exportJson"
           @export-csv="exportCsv"
         />
@@ -105,7 +109,7 @@ onMounted(() => {
   </div>
   
   <!-- Loading Mask -->
-  <LoadingMask :visible="isLoading" :text="loadingText" />
+  <LoadingMask :visible="isLoading" :text="loadingText" :progress="progress" />
   
   <!-- Settings Modal -->
   <SettingsModal

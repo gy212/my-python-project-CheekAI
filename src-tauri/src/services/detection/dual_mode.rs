@@ -1,7 +1,7 @@
 // Dual Mode Detection
 // Combines paragraph and sentence detection modes
-// - Paragraph mode: Batch processing via GLM
-// - Sentence mode: Filtered processing via DeepSeek (with length-based filtering)
+// - Paragraph mode: LLM analysis (default OpenAI GPT-5.2)
+// - Sentence mode: LLM analysis (default OpenAI GPT-5.2)
 // - Result fusion: Weighted combination (paragraph 0.6 + sentence 0.4)
 
 use crate::models::{AggregationResponse, DualDetectionResult, ModeDetectionResult};
@@ -10,10 +10,7 @@ use tracing::info;
 
 use super::aggregation::aggregate_segments;
 use super::comparison::compare_dual_mode_results;
-use super::llm_analyzer::{
-    build_paragraphs_batch_with_glm,
-    build_sentences_filtered_with_deepseek,
-};
+use super::llm_analyzer::build_segments_with_llm;
 use super::segment_builder::build_segments;
 
 /// Weight for paragraph mode in fusion
@@ -61,14 +58,14 @@ pub fn dual_mode_detect(
 }
 
 /// Perform dual-mode detection with LLM (async version)
-/// Uses batch GLM for paragraphs and filtered DeepSeek for sentences
-/// Processes both modes in parallel for efficiency
+/// Uses the selected provider, defaulting to OpenAI (GPT-5.2)
+/// Processes both modes in parallel for efficiency.
 pub async fn dual_mode_detect_with_llm(
     text: &str,
     language: &str,
     use_perplexity: bool,
     use_stylometry: bool,
-    _provider: Option<&str>, // Ignored, using GLM for paragraphs and DeepSeek for sentences
+    provider: Option<&str>,
 ) -> DualDetectionResult {
     info!("[DUAL_MODE] Starting LLM-powered dual mode detection");
     info!(
@@ -88,22 +85,11 @@ pub async fn dual_mode_detect_with_llm(
         sent_blocks.len()
     );
 
-    // Run paragraph (GLM batch) and sentence (DeepSeek filtered) detection in parallel
-    let para_future = build_paragraphs_batch_with_glm(
-        text,
-        language,
-        &para_blocks,
-        use_perplexity,
-        use_stylometry,
-    );
-    
-    let sent_future = build_sentences_filtered_with_deepseek(
-        text,
-        language,
-        &sent_blocks,
-        use_perplexity,
-        use_stylometry,
-    );
+    // Run paragraph and sentence detection in parallel
+    let para_future =
+        build_segments_with_llm(text, language, &para_blocks, use_perplexity, use_stylometry, provider);
+    let sent_future =
+        build_segments_with_llm(text, language, &sent_blocks, use_perplexity, use_stylometry, provider);
 
     // Execute both in parallel
     info!("[DUAL_MODE] Starting parallel LLM calls...");

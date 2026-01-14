@@ -5,6 +5,7 @@ pub mod api;
 use api::{
     delete_api_key, detect_dual_mode, detect_text, diagnose_api_config, get_api_key, get_config, get_providers,
     preprocess_file, save_config, store_api_key, test_api_connection, get_provider_url, set_provider_url,
+    benchmark_gpt_concurrency,
 };
 
 use std::fs;
@@ -257,6 +258,7 @@ pub fn run() {
             get_provider_url,
             set_provider_url,
             preprocess_file,
+            benchmark_gpt_concurrency,
             diagnose_api_config,
             test_api_connection,
             report_frontend_ready,

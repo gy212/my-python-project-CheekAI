@@ -2,6 +2,7 @@
 defineProps<{
   visible: boolean;
   text?: string;
+  progress?: number;
 }>();
 </script>
 
@@ -11,7 +12,13 @@ defineProps<{
       <div class="dot"></div>
       <div class="dot"></div>
       <div class="dot"></div>
-      <span id="loadingText">{{ text || '正在检测...' }}</span>
+      <div class="progress-info">
+        <span id="loadingText">{{ text || '正在检测...' }}</span>
+        <span v-if="progress" class="progress-percent">{{ progress }}%</span>
+      </div>
+      <div v-if="progress" class="progress-bar">
+        <div class="progress-fill" :style="{ width: progress + '%' }"></div>
+      </div>
     </div>
   </div>
 </template>
@@ -30,6 +37,7 @@ defineProps<{
 
 .loading-mask .spinner {
   display: flex;
+  flex-direction: column;
   gap: 12px;
   align-items: center;
   padding: 20px 28px;
@@ -37,8 +45,50 @@ defineProps<{
   border: 2px solid var(--border-dark);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-lg);
+  min-width: 200px;
+}
+
+.loading-mask .spinner > .dot {
+  display: none;
+}
+
+.loading-mask .spinner:has(.progress-bar) > .dot {
+  display: none;
+}
+
+.loading-mask .spinner:not(:has(.progress-bar)) {
+  flex-direction: row;
+}
+
+.loading-mask .spinner:not(:has(.progress-bar)) > .dot {
+  display: block;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
   font-weight: 600;
   color: var(--text-surface-main);
+}
+
+.progress-percent {
+  color: var(--primary);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--border-dark);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
 }
 
 .loading-mask .dot {
@@ -61,6 +111,9 @@ defineProps<{
   .loading-mask .dot {
     animation: none;
     opacity: 1;
+  }
+  .progress-fill {
+    transition: none;
   }
 }
 </style>

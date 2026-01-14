@@ -169,6 +169,8 @@ pub struct TextBlock {
 }
 
 /// Build paragraph blocks from plain text
+/// Uses blank lines (one or more consecutive empty lines) as paragraph separators
+/// to preserve the original document structure.
 pub fn build_paragraph_blocks(text: &str) -> Vec<TextBlock> {
     let mut blocks = Vec::new();
 
@@ -176,46 +178,20 @@ pub fn build_paragraph_blocks(text: &str) -> Vec<TextBlock> {
         return blocks;
     }
 
+    // Split on blank lines (one or more consecutive empty lines)
+    let para_re = Regex::new(r"\n\s*\n").unwrap();
     let mut cursor: usize = 0;
-    let mut buf: Vec<&str> = Vec::new();
-    let mut buf_start: Option<usize> = None;
 
-    for line in text.split('\n') {
-        let stripped = line.trim();
-
-        if !stripped.is_empty() && buf_start.is_none() {
-            buf_start = Some(cursor);
+    for para in para_re.split(text) {
+        let trimmed = para.trim();
+        if trimmed.is_empty() {
+            cursor += para.len() + 2;
+            continue;
         }
 
-        if !stripped.is_empty() {
-            buf.push(line.trim_end_matches('\n'));
-        } else if !buf.is_empty() {
-            let block_text = buf.join("\n").trim().to_string();
-            let start = buf_start.unwrap_or(cursor.saturating_sub(line.len()));
-            let end = cursor;
-
-            blocks.push(TextBlock {
-                index: blocks.len() as i32,
-                label: "body".to_string(),
-                need_detect: true,
-                merge_with_prev: false,
-                start: start as i32,
-                end: end as i32,
-                text: block_text,
-                sentence_count: None,
-            });
-
-            buf.clear();
-            buf_start = None;
-        }
-
-        cursor += line.len() + 1; // +1 for newline
-    }
-
-    // Handle remaining buffer
-    if !buf.is_empty() {
-        let start = buf_start.unwrap_or(0);
-        let block_text = buf.join("\n").trim().to_string();
+        // Find actual start position in original text
+        let start = text[cursor..].find(trimmed).map(|i| cursor + i).unwrap_or(cursor);
+        let end = start + trimmed.len();
 
         blocks.push(TextBlock {
             index: blocks.len() as i32,
@@ -223,10 +199,12 @@ pub fn build_paragraph_blocks(text: &str) -> Vec<TextBlock> {
             need_detect: true,
             merge_with_prev: false,
             start: start as i32,
-            end: text.len() as i32,
-            text: block_text,
+            end: end as i32,
+            text: trimmed.to_string(),
             sentence_count: None,
         });
+
+        cursor = end;
     }
 
     // Ensure at least one block
@@ -238,14 +216,15 @@ pub fn build_paragraph_blocks(text: &str) -> Vec<TextBlock> {
             merge_with_prev: false,
             start: 0,
             end: text.len() as i32,
-            text: text.to_string(),
+            text: text.trim().to_string(),
             sentence_count: None,
         });
     }
 
-    postprocess_paragraph_blocks(blocks, text)
+    blocks
 }
 
+#[allow(dead_code)]
 fn postprocess_paragraph_blocks(blocks: Vec<TextBlock>, text: &str) -> Vec<TextBlock> {
     // If there's only one block, keep it to avoid dropping the entire content for short inputs.
     if blocks.len() <= 1 {

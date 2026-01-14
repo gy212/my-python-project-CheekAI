@@ -5,10 +5,11 @@
 // - Sentence-level analysis via DeepSeek with length filtering
 
 use crate::models::{SegmentResponse, SignalLLMJudgment};
-use crate::services::providers::{get_api_key, parse_provider, ProviderClient};
+use crate::services::providers::{get_api_key, parse_provider, ProviderClient, OPENAI_DEFAULT_MODEL};
+use crate::services::ConfigStore;
 use crate::services::text_processor::{compute_stylometry, TextBlock};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -20,9 +21,23 @@ use super::segment_builder::{build_segments, make_segment};
 const SENTENCE_MIN_LENGTH: usize = 10;  // Skip sentences shorter than this
 const SENTENCE_LLM_THRESHOLD: usize = 50;  // Send to LLM if >= this length
 const SENTENCE_REASONER_THRESHOLD: usize = 300; // Use DeepSeek reasoner for very long segments
-const DEEPSEEK_SENTENCE_MAX_CONCURRENCY: usize = 4;
+const DEEPSEEK_SENTENCE_MAX_CONCURRENCY: usize = 10;
 const DEEPSEEK_SENTENCE_MAX_ATTEMPTS: usize = 3; // initial + retries
 const DEEPSEEK_SENTENCE_TIMEOUT_SECS: u64 = 60;
+
+/// LLM output budget.
+///
+/// Some gateways/models (notably Gemini) may spend a large portion of the budget on internal
+/// reasoning/thoughts, which can cause empty content unless `max_tokens` is set sufficiently high.
+const LLM_MAX_TOKENS: i32 = 8192;
+
+const LLM_SEGMENT_MAX_CONCURRENCY: usize = 10;
+
+static LLM_SEGMENT_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn llm_segment_semaphore() -> &'static Arc<Semaphore> {
+    LLM_SEGMENT_SEMAPHORE.get_or_init(|| Arc::new(Semaphore::new(LLM_SEGMENT_MAX_CONCURRENCY)))
+}
 
 /// System prompt for single segment AI detection
 const DETECTION_SYSTEM_PROMPT: &str = r#"你是一个专业的AI文本检测专家。你需要判断给定的文本是否由AI生成。
@@ -91,33 +106,72 @@ fn default_confidence() -> f64 {
     0.6
 }
 
-/// Call LLM to analyze text segment (single)
-async fn call_llm_for_segment(
+fn enrich_llm_call_error(message: &str) -> String {
+    if message.contains("API error: 401") {
+        format!("{}（请检查 Token/API Key 是否正确或已过期）", message)
+    } else {
+        message.to_string()
+    }
+}
+
+async fn call_llm_for_segment_with_url(
     client: &ProviderClient,
     text: &str,
     provider_name: &str,
     model: &str,
     api_key: &str,
+    custom_url: Option<&str>,
 ) -> Result<LLMJudgment, String> {
     let user_prompt = format!("请分析以下文本是否由AI生成，并以JSON格式返回结果：\n\n{}", text);
 
     let result = if provider_name == "deepseek" {
         // Use call_deepseek_json since prompt contains 'json'
         client
-            .call_deepseek_json(model, api_key, DETECTION_SYSTEM_PROMPT, &user_prompt, 512)
-            .await
-    } else if provider_name == "gemini" {
-        client
-            .call_gemini(model, api_key, DETECTION_SYSTEM_PROMPT, &user_prompt, 512)
-            .await
-    } else {
-        client
-            .call_glm(
+            .call_deepseek_json_with_url(
+                custom_url,
                 model,
                 api_key,
                 DETECTION_SYSTEM_PROMPT,
                 &user_prompt,
-                512,
+                LLM_MAX_TOKENS,
+            )
+            .await
+    } else if provider_name == "gemini" {
+        client
+            .call_gemini_with_url(
+                custom_url,
+                model,
+                api_key,
+                DETECTION_SYSTEM_PROMPT,
+                &user_prompt,
+                LLM_MAX_TOKENS,
+            )
+            .await
+    } else if provider_name == "openai" {
+        let combined = format!("{}\n\n{}", DETECTION_SYSTEM_PROMPT, user_prompt);
+        client
+            .call_openai_responses_with_url(custom_url, model, api_key, &combined)
+            .await
+    } else if provider_name == "anthropic" || provider_name == "claude" {
+        client
+            .call_anthropic_with_url(
+                custom_url,
+                model,
+                api_key,
+                DETECTION_SYSTEM_PROMPT,
+                &user_prompt,
+                LLM_MAX_TOKENS,
+            )
+            .await
+    } else {
+        client
+            .call_glm_with_url(
+                custom_url,
+                model,
+                api_key,
+                DETECTION_SYSTEM_PROMPT,
+                &user_prompt,
+                LLM_MAX_TOKENS,
                 false,
             )
             .await
@@ -125,7 +179,10 @@ async fn call_llm_for_segment(
 
     match result {
         Ok(chat_result) => parse_single_judgment(&chat_result.content),
-        Err(e) => Err(format!("LLM call failed: {}", e)),
+        Err(e) => {
+            let msg = e.to_string();
+            Err(format!("LLM call failed: {}", enrich_llm_call_error(&msg)))
+        }
     }
 }
 
@@ -145,7 +202,7 @@ async fn call_deepseek_for_sentence(
 
     let result = client
         // Use call_deepseek_json since prompt contains 'json'
-        .call_deepseek_json(model, api_key, DETECTION_SYSTEM_PROMPT, &user_prompt, 512)
+        .call_deepseek_json(model, api_key, DETECTION_SYSTEM_PROMPT, &user_prompt, LLM_MAX_TOKENS)
         .await;
 
     match result {
@@ -153,7 +210,10 @@ async fn call_deepseek_for_sentence(
             let judgment = parse_single_judgment(&chat_result.content)?;
             Ok((judgment, chat_result.latency_ms))
         }
-        Err(e) => Err(format!("LLM call failed: {}", e)),
+        Err(e) => {
+            let msg = e.to_string();
+            Err(format!("LLM call failed: {}", enrich_llm_call_error(&msg)))
+        }
     }
 }
 
@@ -235,7 +295,7 @@ async fn call_llm_batch_paragraphs(
             api_key,
             BATCH_DETECTION_SYSTEM_PROMPT,
             &user_prompt,
-            2048, // More tokens for batch response
+            LLM_MAX_TOKENS, // More tokens for batch response
             false,
         )
         .await;
@@ -598,37 +658,56 @@ pub async fn build_segments_with_llm(
     use_stylometry: bool,
     provider: Option<&str>,
 ) -> Vec<SegmentResponse> {
+    build_segments_with_llm_progress(text, language, blocks, use_perplexity, use_stylometry, provider, |_, _| {}).await
+}
+
+/// Build segments with LLM analysis and progress callback
+pub async fn build_segments_with_llm_progress<F>(
+    text: &str,
+    language: &str,
+    blocks: &[TextBlock],
+    use_perplexity: bool,
+    use_stylometry: bool,
+    provider: Option<&str>,
+    on_progress: F,
+) -> Vec<SegmentResponse>
+where
+    F: Fn(usize, usize),
+{
     // Get provider info and API key
-    let provider_info = if let Some(p) = provider {
+    let provider = provider.map(|p| p.trim()).filter(|p| !p.is_empty());
+
+    // User-selected provider (fallback to auto if key missing)
+    let selected = provider.and_then(|p| {
         let spec = parse_provider(p);
-        let model = if spec.model.trim().is_empty() {
-            match spec.name.as_str() {
-                "gemini" => "gemini-3-pro-preview".to_string(),
-                "glm" => "glm-4-flash".to_string(),
-                "deepseek" => "deepseek-chat".to_string(),
-                _ => spec.model,
-            }
-        } else {
-            spec.model
+        let default_model = match spec.name.as_str() {
+            "openai" => OPENAI_DEFAULT_MODEL.to_string(),
+            "gemini" => "gemini-3-pro-preview".to_string(),
+            "glm" => "glm-4-flash".to_string(),
+            "deepseek" => "deepseek-chat".to_string(),
+            "anthropic" | "claude" => "claude-sonnet-4-20250514".to_string(),
+            _ => spec.model.clone(),
         };
-        let key = get_api_key(&spec.name);
-        if let Some(k) = key {
-            Some((spec.name, model, k))
-        } else {
-            None
-        }
-    } else {
-        // Try Gemini first, then GLM, then DeepSeek
-        if let Some(key) = get_api_key("gemini") {
+        let model = if spec.model.trim().is_empty() { default_model } else { spec.model };
+        get_api_key(&spec.name).map(|k| (spec.name, model, k))
+    });
+
+    // Auto default: OpenAI (GPT-5.2) first.
+    let provider_info = selected.or_else(|| {
+        if let Some(key) = get_api_key("openai") {
+            Some(("openai".to_string(), OPENAI_DEFAULT_MODEL.to_string(), key))
+        } else if let Some(key) = get_api_key("gemini") {
             Some(("gemini".to_string(), "gemini-3-pro-preview".to_string(), key))
         } else if let Some(key) = get_api_key("glm") {
             Some(("glm".to_string(), "glm-4-flash".to_string(), key))
         } else if let Some(key) = get_api_key("deepseek") {
             Some(("deepseek".to_string(), "deepseek-chat".to_string(), key))
+        } else if let Some(key) = get_api_key("anthropic") {
+            Some(("anthropic".to_string(), "claude-sonnet-4-20250514".to_string(), key))
         } else {
             None
         }
-    };
+    });
 
     // If no API key available, use non-LLM detection
     let (provider_name, model, api_key) = match provider_info {
@@ -639,50 +718,142 @@ pub async fn build_segments_with_llm(
         }
     };
 
-    let client = ProviderClient::new();
-    let mut segments = Vec::new();
+    let config = ConfigStore::default_config_dir()
+        .map(ConfigStore::new)
+        .and_then(|store| store.load().ok());
+
+    let proxy_url = config
+        .as_ref()
+        .and_then(|c| c.proxy.as_ref())
+        .filter(|p| p.enabled)
+        .and_then(|p| p.https.as_deref().or(p.http.as_deref()))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let client = match proxy_url.as_deref() {
+        Some(p) => ProviderClient::with_proxy(p).unwrap_or_else(|_| ProviderClient::new()),
+        None => ProviderClient::new(),
+    };
+
+    let custom_url = ConfigStore::default_config_dir()
+        .map(ConfigStore::new)
+        .and_then(|store| store.get_provider_url(&provider_name).ok().flatten())
+        .or_else(|| {
+            // Support common aliases stored in config.
+            if provider_name == "anthropic" {
+                ConfigStore::default_config_dir()
+                    .map(ConfigStore::new)
+                    .and_then(|store| store.get_provider_url("claude").ok().flatten())
+            } else if provider_name == "claude" {
+                ConfigStore::default_config_dir()
+                    .map(ConfigStore::new)
+                    .and_then(|store| store.get_provider_url("anthropic").ok().flatten())
+            } else {
+                None
+            }
+        });
+
+    let client = Arc::new(client);
+    let semaphore = llm_segment_semaphore().clone();
+
+    let mut segments: Vec<SegmentResponse> = Vec::new();
     let blocks_to_process: Vec<_> = blocks.iter().filter(|b| b.need_detect).collect();
+    let mut join_set: JoinSet<SegmentResponse> = JoinSet::new();
+
+    let started = Instant::now();
+    info!(
+        "[LLM_ANALYZER] segments_with_llm start provider={} model={} blocks={} max_concurrency={}",
+        provider_name,
+        model,
+        blocks_to_process.len(),
+        LLM_SEGMENT_MAX_CONCURRENCY
+    );
 
     for (idx, block) in blocks_to_process.iter().enumerate() {
-        let block_text = &text[block.start as usize..block.end as usize];
+        let client = Arc::clone(&client);
+        let semaphore = Arc::clone(&semaphore);
+        let provider_name = provider_name.clone();
+        let model = model.clone();
+        let api_key = api_key.clone();
+        let language = language.to_string();
+        let block_text = text[block.start as usize..block.end as usize].to_string();
+        let start = block.start;
+        let end = block.end;
+        let custom_url = custom_url.clone();
+        let timeout_duration = std::time::Duration::from_secs(120);
 
-        // Create base segment
-        let mut segment = make_segment(
-            idx as i32,
-            language,
-            block.start,
-            block.end,
-            block_text,
-            use_perplexity,
-            use_stylometry,
-        );
+        join_set.spawn(async move {
+            let mut segment = make_segment(
+                idx as i32,
+                &language,
+                start,
+                end,
+                &block_text,
+                use_perplexity,
+                use_stylometry,
+            );
 
-        // Use tokio timeout to prevent hanging (60 seconds per segment)
-        let timeout_duration = std::time::Duration::from_secs(60);
-        let llm_future = call_llm_for_segment(&client, block_text, &provider_name, &model, &api_key);
+            let permit = semaphore.acquire().await;
+            if permit.is_err() {
+                segment.ai_probability = calculate_local_probability(&block_text);
+                segment.confidence = 0.5;
+                segment.explanations.push("semaphore_closed_local_only".to_string());
+                return segment;
+            }
+            let _permit = permit.unwrap();
 
-        match tokio::time::timeout(timeout_duration, llm_future).await {
-            Ok(Ok(judgment)) => {
-                segment.ai_probability = judgment.probability.clamp(0.0, 1.0);
-                segment.confidence = judgment.confidence.clamp(0.0, 1.0);
-                segment.signals.llm_judgment = SignalLLMJudgment {
-                    prob: Some(judgment.probability),
-                    models: vec![format!("{}:{}", provider_name, model)],
-                };
-                if let Some(ref reason) = judgment.reasoning {
-                    segment.explanations.push(reason.clone());
+            let llm_future = call_llm_for_segment_with_url(
+                &client,
+                &block_text,
+                &provider_name,
+                &model,
+                &api_key,
+                custom_url.as_deref(),
+            );
+
+            match tokio::time::timeout(timeout_duration, llm_future).await {
+                Ok(Ok(judgment)) => {
+                    segment.ai_probability = judgment.probability.clamp(0.0, 1.0);
+                    segment.confidence = judgment.confidence.clamp(0.0, 1.0);
+                    segment.signals.llm_judgment = SignalLLMJudgment {
+                        prob: Some(judgment.probability),
+                        models: vec![format!("{}:{}", provider_name, model)],
+                    };
+                    if let Some(reason) = judgment.reasoning {
+                        segment.explanations.push(reason);
+                    }
+                }
+                Ok(Err(e)) => {
+                    warn!("[LLM_ANALYZER] LLM analysis failed for segment {}: {}", idx, e);
+                }
+                Err(_) => {
+                    warn!("[LLM_ANALYZER] LLM analysis timeout for segment {}", idx);
                 }
             }
-            Ok(Err(e)) => {
-                warn!("LLM analysis failed for segment {}: {}", idx, e);
-            }
-            Err(_) => {
-                warn!("LLM analysis timeout for segment {}", idx);
-            }
-        }
 
-        segments.push(segment);
+            segment
+        });
     }
+
+    let total = blocks_to_process.len();
+    let mut done = 0usize;
+
+    while let Some(res) = join_set.join_next().await {
+        done += 1;
+        on_progress(done, total);
+        match res {
+            Ok(seg) => segments.push(seg),
+            Err(e) => warn!("[LLM_ANALYZER] segment task failed: {}", e),
+        }
+    }
+
+    segments.sort_by_key(|s| s.chunk_id);
+    info!(
+        "[LLM_ANALYZER] segments_with_llm done segments={} elapsed_ms={}",
+        segments.len(),
+        started.elapsed().as_millis()
+    );
 
     segments
 }

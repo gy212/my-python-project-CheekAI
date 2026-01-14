@@ -101,6 +101,25 @@ export interface DualDetectionResult {
   fusedAggregation?: AggregationResponse;
 }
 
+// Content Filter Types
+export type ParagraphCategory = 'body' | 'title' | 'toc' | 'reference' | 'auxiliary' | 'noise';
+
+export interface ParagraphClassification {
+  index: number;
+  category: ParagraphCategory;
+  confidence: number;
+  reason: string;
+}
+
+export interface FilterSummary {
+  totalParagraphs: number;
+  bodyCount: number;
+  filteredCount: number;
+  filteredByRule: number;
+  filteredByLlm: number;
+  classifications: ParagraphClassification[];
+}
+
 export interface DetectResponse {
   aggregation: AggregationResponse;
   segments: SegmentResponse[];
@@ -116,6 +135,7 @@ export interface DetectResponse {
   version: string;
   requestId: string;
   dualDetection: DualDetectionResult | null;
+  filterSummary?: FilterSummary;
 }
 
 // Request Types

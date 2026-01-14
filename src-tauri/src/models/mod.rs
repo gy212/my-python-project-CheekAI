@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// Re-export FilterSummary from detection module
+pub use crate::services::detection::content_filter::{FilterSummary, ParagraphCategory, ParagraphClassification};
+
 // ============ Preprocess & Chunking Options ============
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -240,6 +243,8 @@ pub struct DetectResponse {
     pub version: String,
     pub request_id: String,
     pub dual_detection: Option<DualDetectionResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_summary: Option<FilterSummary>,
 }
 
 // ============ Batch Detection ============

@@ -29,11 +29,10 @@ export function useProviders() {
       
       if (Array.isArray(data)) {
         for (const provider of data) {
-          // Only expose providers currently supported by detection LLM analyzer.
-          // (Other providers can still be configured/tested in Settings.)
-          if (!["gemini", "glm", "deepseek"].includes(provider.name)) {
-            continue;
-          }
+          // Default LLM is OpenAI (GPT-5.2). Keep OpenAI selectable even if not configured,
+          // so users can see the default and go to Settings to add the key.
+          const allowWithoutKey = provider.name === "openai";
+          if (!provider.has_key && !allowWithoutKey) continue;
 
           // Each provider can have multiple models
           const models =
@@ -41,12 +40,18 @@ export function useProviders() {
               ? ["glm-4-plus", "glm-4.6", "glm-4-flash"]
               : provider.name === "deepseek"
                 ? ["deepseek-chat", "deepseek-reasoner"]
-                : ["gemini-3-pro-preview"];
+                : provider.name === "anthropic"
+                  ? ["claude-sonnet-4-20250514", "claude-opus-4-5-20251101"]
+                  : provider.name === "openai"
+                    ? ["gpt-5.2"]
+                  : provider.name === "gemini"
+                    ? ["gemini-3-pro-preview", "gemini-3-flash-preview"]
+                    : [];
           
           for (const model of models) {
             list.push({
               value: `${provider.name}:${model}`,
-              label: `${provider.display_name} - ${model}${provider.has_key ? '' : ' (未配置密钥)'}`
+              label: `${provider.display_name} - ${model}${provider.has_key ? "" : "（未配置）"}`
             });
           }
         }
