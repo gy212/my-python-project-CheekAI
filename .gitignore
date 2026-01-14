@@ -253,3 +253,6 @@ legacy-python-electron/desktop/dist/
 legacy-python-electron/desktop/dist_final/
 legacy-python-electron/desktop/out/
 legacy-python-electron/desktop/resources/
+
+# Local debug outputs
+segment_docx_*.json

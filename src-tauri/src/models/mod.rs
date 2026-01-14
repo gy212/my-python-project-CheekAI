@@ -209,6 +209,9 @@ pub struct DualDetectionResult {
     /// Weight: paragraph 0.6 + sentence 0.4
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fused_aggregation: Option<AggregationResponse>,
+    /// Optional filter summary (titles/TOC/references/etc.) for transparency in dual-mode
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_summary: Option<FilterSummary>,
 }
 
 // ============ Cost & Preprocess Summary ============

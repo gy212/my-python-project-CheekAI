@@ -54,6 +54,7 @@ pub fn dual_mode_detect(
         },
         comparison,
         fused_aggregation: Some(fused_aggregation),
+        filter_summary: None,
     }
 }
 
@@ -76,8 +77,17 @@ pub async fn dual_mode_detect_with_llm(
     );
     
     // Build blocks first
-    let para_blocks = build_paragraph_blocks(text);
-    let sent_blocks = build_sentence_blocks(text, 50, 200, 300);
+    let para_blocks_raw = build_paragraph_blocks(text);
+    let (para_blocks, filter_summary) = crate::services::filter_paragraphs(&para_blocks_raw, provider).await;
+    let sent_blocks = crate::services::build_sentence_blocks_smart_in_paragraphs(
+        text,
+        language,
+        &para_blocks,
+        200,
+        300,
+        provider,
+    )
+    .await;
     
     info!(
         "[DUAL_MODE] Paragraph blocks: {}, Sentence blocks: {}",
@@ -129,6 +139,7 @@ pub async fn dual_mode_detect_with_llm(
         },
         comparison,
         fused_aggregation: Some(fused_aggregation),
+        filter_summary: Some(filter_summary),
     }
 }
 

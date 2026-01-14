@@ -99,6 +99,8 @@ export interface DualDetectionResult {
   comparison: ComparisonResult;
   /** Fused aggregation combining paragraph and sentence results (weight: paragraph 0.6 + sentence 0.4) */
   fusedAggregation?: AggregationResponse;
+  /** Optional content filter summary (titles/TOC/references/etc.) */
+  filterSummary?: FilterSummary;
 }
 
 // Content Filter Types

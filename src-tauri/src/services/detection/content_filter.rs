@@ -5,7 +5,8 @@ use tracing::{info, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::services::providers::ProviderClient;
+use crate::services::providers::{get_api_key, parse_provider, ProviderClient, OPENAI_DEFAULT_MODEL};
+use crate::services::ConfigStore;
 use crate::services::text_processor::TextBlock;
 
 /// Paragraph classification category
@@ -42,6 +43,8 @@ pub struct FilterSummary {
     pub classifications: Vec<ParagraphClassification>,
 }
 
+const FILTER_MAX_TOKENS: i32 = 2048;
+
 const FILTER_SYSTEM_PROMPT: &str = r#"你是一个文档结构分析专家。请判断以下段落属于哪种类型：
 - body: 正文内容（需要检测）
 - title: 标题、章节名
@@ -56,6 +59,70 @@ const FILTER_SYSTEM_PROMPT: &str = r#"你是一个文档结构分析专家。请
 
 示例：{"paragraphs": [{"index": 0, "category": "body", "confidence": 0.95}]}
 只返回JSON，不要有其他文字。"#;
+
+fn resolve_custom_url(provider_name: &str) -> Option<String> {
+    let store = ConfigStore::default_config_dir().map(ConfigStore::new)?;
+    store
+        .get_provider_url(provider_name)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            if provider_name == "anthropic" {
+                store.get_provider_url("claude").ok().flatten()
+            } else if provider_name == "claude" {
+                store.get_provider_url("anthropic").ok().flatten()
+            } else {
+                None
+            }
+        })
+}
+
+fn extract_json(content: &str) -> String {
+    let trimmed = content.trim();
+
+    // Try to find JSON object
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            return trimmed[start..=end].to_string();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn select_provider_for_filter(provider: Option<&str>) -> Option<(String, String, String)> {
+    let provider = provider.map(|p| p.trim()).filter(|p| !p.is_empty());
+
+    let selected = provider.and_then(|p| {
+        let spec = parse_provider(p);
+        let default_model = match spec.name.as_str() {
+            "openai" => OPENAI_DEFAULT_MODEL.to_string(),
+            "gemini" => "gemini-3-pro-preview".to_string(),
+            "glm" => "glm-4-flash".to_string(),
+            "deepseek" => "deepseek-chat".to_string(),
+            "anthropic" | "claude" => "claude-sonnet-4-20250514".to_string(),
+            _ => spec.model.clone(),
+        };
+        let model = if spec.model.trim().is_empty() { default_model } else { spec.model };
+        get_api_key(&spec.name).map(|k| (spec.name, model, k))
+    });
+
+    selected.or_else(|| {
+        if let Some(key) = get_api_key("openai") {
+            Some(("openai".to_string(), OPENAI_DEFAULT_MODEL.to_string(), key))
+        } else if let Some(key) = get_api_key("gemini") {
+            Some(("gemini".to_string(), "gemini-3-pro-preview".to_string(), key))
+        } else if let Some(key) = get_api_key("glm") {
+            Some(("glm".to_string(), "glm-4-flash".to_string(), key))
+        } else if let Some(key) = get_api_key("deepseek") {
+            Some(("deepseek".to_string(), "deepseek-chat".to_string(), key))
+        } else if let Some(key) = get_api_key("anthropic") {
+            Some(("anthropic".to_string(), "claude-sonnet-4-20250514".to_string(), key))
+        } else {
+            None
+        }
+    })
+}
 
 /// Check if text has sentence-ending punctuation
 fn has_sentence_end_punctuation(s: &str) -> bool {
@@ -288,11 +355,15 @@ struct LlmParagraphResult {
 pub async fn classify_by_llm(
     client: &ProviderClient,
     paragraphs: &[(i32, String)],
-    api_key: &str,
+    provider: Option<&str>,
 ) -> Result<Vec<ParagraphClassification>, String> {
     if paragraphs.is_empty() {
         return Ok(Vec::new());
     }
+
+    let (provider_name, model, api_key) = select_provider_for_filter(provider)
+        .ok_or_else(|| "No API key available for LLM filtering".to_string())?;
+    let custom_url = resolve_custom_url(&provider_name);
 
     // Build user prompt with truncated previews
     let mut user_prompt = String::from("请分析以下段落的类型：\n\n");
@@ -305,19 +376,70 @@ pub async fn classify_by_llm(
         user_prompt.push_str(&format!("[段落 {}]\n{}\n\n", idx, preview));
     }
 
-    let result = client
-        .call_glm(
-            "glm-4-flash",
-            api_key,
-            FILTER_SYSTEM_PROMPT,
-            &user_prompt,
-            2048,
-            false,
-        )
-        .await;
+    let result = match provider_name.as_str() {
+        "glm" => client
+            .call_glm_with_url(
+                custom_url.as_deref(),
+                &model,
+                &api_key,
+                FILTER_SYSTEM_PROMPT,
+                &user_prompt,
+                FILTER_MAX_TOKENS,
+                false,
+            )
+            .await
+            .map(|r| r.content),
+        "deepseek" => client
+            .call_deepseek_json_with_url(
+                custom_url.as_deref(),
+                &model,
+                &api_key,
+                FILTER_SYSTEM_PROMPT,
+                &user_prompt,
+                FILTER_MAX_TOKENS,
+            )
+            .await
+            .map(|r| r.content),
+        "openai" => {
+            let combined = format!("{}\n\n{}", FILTER_SYSTEM_PROMPT, user_prompt);
+            client
+                .call_openai_responses_with_url(custom_url.as_deref(), &model, &api_key, &combined)
+                .await
+                .map(|r| r.content)
+        }
+        "gemini" => client
+            .call_gemini_with_url(
+                custom_url.as_deref(),
+                &model,
+                &api_key,
+                FILTER_SYSTEM_PROMPT,
+                &user_prompt,
+                FILTER_MAX_TOKENS,
+            )
+            .await
+            .map(|r| r.content),
+        "anthropic" | "claude" => client
+            .call_anthropic_with_url(
+                custom_url.as_deref(),
+                &model,
+                &api_key,
+                FILTER_SYSTEM_PROMPT,
+                &user_prompt,
+                FILTER_MAX_TOKENS,
+            )
+            .await
+            .map(|r| r.content),
+        _ => {
+            let combined = format!("{}\n\n{}", FILTER_SYSTEM_PROMPT, user_prompt);
+            client
+                .call_openai_responses_with_url(custom_url.as_deref(), &model, &api_key, &combined)
+                .await
+                .map(|r| r.content)
+        }
+    };
 
     match result {
-        Ok(chat_result) => parse_classification_response(&chat_result.content, paragraphs),
+        Ok(content) => parse_classification_response(&content, paragraphs),
         Err(e) => Err(format!("LLM classification failed: {}", e)),
     }
 }
@@ -367,25 +489,11 @@ fn parse_classification_response(
     Ok(results)
 }
 
-/// Extract JSON from potentially wrapped response
-fn extract_json(content: &str) -> String {
-    let trimmed = content.trim();
-
-    // Try to find JSON object
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return trimmed[start..=end].to_string();
-        }
-    }
-
-    trimmed.to_string()
-}
-
 /// Main hybrid filtering function
 /// Returns (filtered_blocks, filter_summary)
 pub async fn filter_paragraphs(
     blocks: &[TextBlock],
-    api_key: Option<&str>,
+    provider: Option<&str>,
 ) -> (Vec<TextBlock>, FilterSummary) {
     let mut body_blocks = Vec::new();
     let mut classifications = Vec::new();
@@ -416,55 +524,54 @@ pub async fn filter_paragraphs(
     // Phase 2: LLM classification for uncertain paragraphs
     let mut filtered_by_llm = 0;
     if !uncertain_paragraphs.is_empty() {
-        if let Some(key) = api_key {
-            let client = ProviderClient::new();
-            match classify_by_llm(&client, &uncertain_paragraphs, key).await {
-                Ok(llm_classifications) => {
-                    for classification in llm_classifications {
-                        classifications.push(classification.clone());
-                        if classification.category == ParagraphCategory::Body {
-                            if let Some(block) =
-                                blocks.iter().find(|b| b.index == classification.index)
-                            {
-                                body_blocks.push(block.clone());
-                            }
-                        } else {
-                            filtered_by_llm += 1;
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "[content_filter] LLM classification failed, keeping uncertain as body: {}",
-                        e
-                    );
-                    // Fallback: keep uncertain paragraphs as body
-                    for (idx, _) in &uncertain_paragraphs {
-                        if let Some(block) = blocks.iter().find(|b| b.index == *idx) {
+        let config = ConfigStore::default_config_dir()
+            .map(ConfigStore::new)
+            .and_then(|store| store.load().ok());
+
+        let proxy_url = config
+            .as_ref()
+            .and_then(|c| c.proxy.as_ref())
+            .filter(|p| p.enabled)
+            .and_then(|p| p.https.as_deref().or(p.http.as_deref()))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        let client = match proxy_url.as_deref() {
+            Some(p) => ProviderClient::with_proxy(p).unwrap_or_else(|_| ProviderClient::new()),
+            None => ProviderClient::new(),
+        };
+
+        match classify_by_llm(&client, &uncertain_paragraphs, provider).await {
+            Ok(llm_classifications) => {
+                for classification in llm_classifications {
+                    classifications.push(classification.clone());
+                    if classification.category == ParagraphCategory::Body {
+                        if let Some(block) = blocks.iter().find(|b| b.index == classification.index) {
                             body_blocks.push(block.clone());
                         }
-                        classifications.push(ParagraphClassification {
-                            index: *idx,
-                            category: ParagraphCategory::Body,
-                            confidence: 0.5,
-                            reason: "llm_fallback".to_string(),
-                        });
+                    } else {
+                        filtered_by_llm += 1;
                     }
                 }
             }
-        } else {
-            // No API key, keep uncertain paragraphs as body
-            info!("[content_filter] No API key, keeping uncertain paragraphs as body");
-            for (idx, _) in &uncertain_paragraphs {
-                if let Some(block) = blocks.iter().find(|b| b.index == *idx) {
-                    body_blocks.push(block.clone());
+            Err(e) => {
+                warn!(
+                    "[content_filter] LLM classification failed, keeping uncertain as body: {}",
+                    e
+                );
+                // Fallback: keep uncertain paragraphs as body
+                for (idx, _) in &uncertain_paragraphs {
+                    if let Some(block) = blocks.iter().find(|b| b.index == *idx) {
+                        body_blocks.push(block.clone());
+                    }
+                    classifications.push(ParagraphClassification {
+                        index: *idx,
+                        category: ParagraphCategory::Body,
+                        confidence: 0.5,
+                        reason: "llm_fallback".to_string(),
+                    });
                 }
-                classifications.push(ParagraphClassification {
-                    index: *idx,
-                    category: ParagraphCategory::Body,
-                    confidence: 0.5,
-                    reason: "no_api_key".to_string(),
-                });
             }
         }
     }
