@@ -9,7 +9,8 @@ import type {
   AggregationResponse,
   DualDetectionResult,
   DetectTextRequest,
-  FilterSummary
+  FilterSummary,
+  DocumentProfile
 } from "@/types";
 
 interface ProgressEvent {
@@ -32,6 +33,7 @@ export function useDetection() {
   const aggregation = ref<AggregationResponse | null>(null);
   const dualResult = ref<DualDetectionResult | null>(null);
   const filterSummary = ref<FilterSummary | undefined>(undefined);
+  const documentProfile = ref<DocumentProfile | null>(null);
 
   // Computed
   const hasResult = computed(() => segments.value.length > 0);
@@ -94,11 +96,13 @@ export function useDetection() {
         segments.value = data.paragraph?.segments || [];
         aggregation.value = data.paragraph?.aggregation;
         filterSummary.value = data.filterSummary;
+        documentProfile.value = data.documentProfile ?? null;
       } else {
         segments.value = data.segments || [];
         aggregation.value = data.aggregation;
         dualResult.value = null;
         filterSummary.value = data.filterSummary;
+        documentProfile.value = data.documentProfile ?? null;
       }
     } catch (err: any) {
       alert("检测失败: " + (err.message || err));
@@ -114,6 +118,7 @@ export function useDetection() {
     aggregation.value = null;
     dualResult.value = null;
     filterSummary.value = undefined;
+    documentProfile.value = null;
   }
 
   // UI Helper Functions
@@ -158,12 +163,15 @@ export function useDetection() {
   }
 
   function exportCsv() {
-    const rows = [["段落ID", "AI概率", "置信度", "决策"]];
+    const rows = [["段落ID", "原始概率", "置信度", "不确定度", "决策"]];
     segments.value.forEach((seg: any) => {
+      const rawProb = seg.rawProbability ?? seg.aiProbability ?? 0;
+      const uncertainty = seg.uncertainty ?? 0;
       rows.push([
         seg.chunkId,
-        (seg.aiProbability * 100).toFixed(1) + "%",
+        (rawProb * 100).toFixed(1) + "%",
         (seg.confidence * 100).toFixed(1) + "%",
+        (uncertainty * 100).toFixed(1) + "%",
         seg.decision || "",
       ]);
     });
@@ -190,6 +198,7 @@ export function useDetection() {
     aggregation,
     dualResult,
     filterSummary,
+    documentProfile,
     // Computed
     hasResult,
     overallDecision,

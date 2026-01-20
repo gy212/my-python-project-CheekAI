@@ -26,6 +26,7 @@ const {
   aggregation,
   dualResult,
   filterSummary,
+  documentProfile,
   hasResult,
   overallDecision,
   overallProbability,
@@ -100,6 +101,7 @@ onMounted(() => {
           :overallProbability="overallProbability"
           :overallDecision="overallDecision"
           :originalText="inputText"
+          :documentProfile="documentProfile"
           :filterSummary="filterSummary"
           @export-json="exportJson"
           @export-csv="exportCsv"

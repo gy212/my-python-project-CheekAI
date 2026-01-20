@@ -66,7 +66,7 @@ onUnmounted(() => {
     <header class="card-heading">
       <p class="eyebrow">检测控制</p>
       <h1>运行参数</h1>
-      <p class="card-subtitle">敏感度关联 chunk 配置 · LLM 提供商管理</p>
+      <p class="card-subtitle">灵敏度影响判定阈值 · LLM 提供商管理</p>
     </header>
     <div class="form-grid">
       <!-- Sensitivity Select -->
@@ -95,6 +95,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <p class="form-hint">灵敏度只影响判定阈值与复核策略，不改变风险概率</p>
       </div>
       
       <!-- Provider Select -->
@@ -203,6 +204,12 @@ onUnmounted(() => {
   letter-spacing: 0.1em;
   font-weight: 700;
   color: var(--text-surface-muted);
+}
+
+.form-hint {
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
 }
 
 .span-2 {

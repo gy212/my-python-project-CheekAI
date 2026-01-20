@@ -95,6 +95,18 @@ pub struct SignalLLMJudgment {
     pub prob: Option<f64>,
     #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default)]
+    pub uncertainty: Option<f64>,
+    #[serde(default)]
+    pub evidence: Vec<SignalLLMEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalLLMEvidence {
+    pub id: String,
+    pub score: f64,
+    pub evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -121,13 +133,34 @@ pub struct SegmentResponse {
     pub chunk_id: i32,
     pub language: String,
     pub offsets: SegmentOffsets,
-    pub ai_probability: f64,
+    #[serde(alias = "aiProbability")]
+    pub raw_probability: f64,
     pub confidence: f64,
+    #[serde(default)]
+    pub uncertainty: f64,
+    #[serde(default)]
+    pub decision: String,
     pub signals: SegmentSignals,
     pub explanations: Vec<String>,
 }
 
 // ============ Aggregation ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionThresholds {
+    pub review: f64,
+    pub flag: f64,
+}
+
+impl Default for DecisionThresholds {
+    fn default() -> Self {
+        Self {
+            review: 0.65,
+            flag: 0.85,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,6 +193,8 @@ pub struct AggregationResponse {
     pub overall_confidence: f64,
     pub method: String,
     pub thresholds: AggregationThresholds,
+    #[serde(default)]
+    pub decision_thresholds: DecisionThresholds,
     pub rubric_version: String,
     pub decision: String,
     pub buffer_margin: f64,
@@ -212,6 +247,8 @@ pub struct DualDetectionResult {
     /// Optional filter summary (titles/TOC/references/etc.) for transparency in dual-mode
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter_summary: Option<FilterSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_profile: Option<DocumentProfile>,
 }
 
 // ============ Cost & Preprocess Summary ============
@@ -234,6 +271,23 @@ pub struct CostBreakdown {
     pub provider_breakdown: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentProfile {
+    pub category: String,
+    pub summary: String,
+    #[serde(default, alias = "field")]
+    pub discipline: Option<String>,
+    #[serde(default)]
+    pub subfield: Option<String>,
+    #[serde(default, alias = "paperType", alias = "paper_type")]
+    pub paper_type: Option<String>,
+    #[serde(default)]
+    pub conventions: Vec<String>,
+    #[serde(default)]
+    pub validity: String,
+}
+
 // ============ Detection Response ============
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +300,8 @@ pub struct DetectResponse {
     pub version: String,
     pub request_id: String,
     pub dual_detection: Option<DualDetectionResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_profile: Option<DocumentProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter_summary: Option<FilterSummary>,
 }

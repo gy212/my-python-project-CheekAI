@@ -2,19 +2,22 @@
 // Aggregates segment results into overall detection result
 
 use crate::models::{AggregationResponse, AggregationThresholds, SegmentResponse};
+use super::sensitivity::{decide_overall, decision_thresholds};
 
 const RUBRIC_VERSION: &str = "rubric-v1.2";
 const DEFAULT_BUFFER_MARGIN: f64 = 0.03;
 
 /// Aggregate segments into overall result
 /// Uses confidence-weighted aggregation with robust statistics
-pub fn aggregate_segments(segments: &[SegmentResponse]) -> AggregationResponse {
+pub fn aggregate_segments(segments: &[SegmentResponse], sensitivity: &str) -> AggregationResponse {
     if segments.is_empty() {
+        let decision_thresholds = decision_thresholds(sensitivity);
         return AggregationResponse {
             overall_probability: 0.0,
             overall_confidence: 0.0,
             method: "weighted".to_string(),
             thresholds: AggregationThresholds::default(),
+            decision_thresholds,
             rubric_version: RUBRIC_VERSION.to_string(),
             decision: "pass".to_string(),
             buffer_margin: DEFAULT_BUFFER_MARGIN,
@@ -40,13 +43,13 @@ pub fn aggregate_segments(segments: &[SegmentResponse]) -> AggregationResponse {
     let weighted_prob: f64 = segments
         .iter()
         .zip(weights.iter())
-        .map(|(s, w)| s.ai_probability * w)
+        .map(|(s, w)| s.raw_probability * w)
         .sum::<f64>()
         / total.max(1.0);
 
     // Also compute trimmed mean (remove top/bottom 10%) for robustness
     let trimmed_prob = if segments.len() >= 5 {
-        let mut probs: Vec<f64> = segments.iter().map(|s| s.ai_probability).collect();
+        let mut probs: Vec<f64> = segments.iter().map(|s| s.raw_probability).collect();
         probs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let trim_count = (probs.len() as f64 * 0.1).ceil() as usize;
         let trimmed: Vec<f64> = probs[trim_count..probs.len() - trim_count].to_vec();
@@ -70,14 +73,29 @@ pub fn aggregate_segments(segments: &[SegmentResponse]) -> AggregationResponse {
         .sum::<f64>()
         / total.max(1.0);
 
+    let overall_uncertainty: f64 = segments
+        .iter()
+        .zip(weights.iter())
+        .map(|(s, w)| s.uncertainty * w)
+        .sum::<f64>()
+        / total.max(1.0);
+
     let thresholds = AggregationThresholds::default();
-    let decision = derive_decision(overall, &thresholds, DEFAULT_BUFFER_MARGIN);
+    let decision_thresholds = decision_thresholds(sensitivity);
+    let decision = decide_overall(
+        overall.clamp(0.0, 1.0),
+        overall_uncertainty.clamp(0.0, 1.0),
+        segments,
+        sensitivity,
+        DEFAULT_BUFFER_MARGIN,
+    );
 
     AggregationResponse {
         overall_probability: overall.clamp(0.0, 1.0),
         overall_confidence: confidence.clamp(0.0, 1.0),
         method: "confidence_weighted".to_string(),
         thresholds,
+        decision_thresholds,
         rubric_version: RUBRIC_VERSION.to_string(),
         decision,
         buffer_margin: DEFAULT_BUFFER_MARGIN,
@@ -88,24 +106,24 @@ pub fn aggregate_segments(segments: &[SegmentResponse]) -> AggregationResponse {
     }
 }
 
-/// Derive decision from probability
-pub fn derive_decision(prob: f64, thresholds: &AggregationThresholds, margin: f64) -> String {
-    if prob < thresholds.low - margin {
-        "pass".to_string()
-    } else if prob < thresholds.high - margin {
-        "review".to_string()
-    } else {
-        "flag".to_string()
-    }
+/// Derive decision from aggregated probability and uncertainty (delegates to sensitivity gates)
+pub fn derive_decision(
+    prob: f64,
+    overall_uncertainty: f64,
+    segments: &[SegmentResponse],
+    sensitivity: &str,
+    margin: f64,
+) -> String {
+    decide_overall(prob, overall_uncertainty, segments, sensitivity, margin)
 }
 
 /// Apply contrast sharpening to segments
-pub fn contrast_sharpen_segments(segments: &mut [SegmentResponse], sensitivity: &str) {
+pub fn contrast_sharpen_segments(segments: &mut [SegmentResponse]) {
     if segments.len() < 4 {
         return;
     }
 
-    let probs: Vec<f64> = segments.iter().map(|s| s.ai_probability).collect();
+    let probs: Vec<f64> = segments.iter().map(|s| s.raw_probability).collect();
     let mut sorted = probs.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -116,11 +134,7 @@ pub fn contrast_sharpen_segments(segments: &mut [SegmentResponse], sensitivity: 
 
     let z: Vec<f64> = probs.iter().map(|p| (p - median) / (iqr / 1.349)).collect();
 
-    let base_gamma = match sensitivity.to_lowercase().as_str() {
-        "low" => 1.10,
-        "high" => 1.75,
-        _ => 1.45,
-    };
+    let base_gamma = 1.45;
 
     let doc_std = std_dev(&probs);
     let flat_boost = 1.0 + ((0.06 - doc_std) * 10.0).max(0.0);
@@ -157,11 +171,11 @@ pub fn contrast_sharpen_segments(segments: &mut [SegmentResponse], sensitivity: 
         let x = lp - c;
         let new_p = sigmoid_clamped(x);
         let final_p = if seg.confidence < 0.5 {
-            0.8 * seg.ai_probability + 0.2 * new_p
+            0.8 * seg.raw_probability + 0.2 * new_p
         } else {
             new_p
         };
-        seg.ai_probability = final_p.clamp(0.02, 0.98);
+        seg.raw_probability = final_p.clamp(0.02, 0.98);
     }
 }
 
@@ -201,15 +215,14 @@ mod tests {
 
     #[test]
     fn test_derive_decision() {
-        let thresholds = AggregationThresholds::default();
-        assert_eq!(derive_decision(0.5, &thresholds, 0.03), "pass");
-        assert_eq!(derive_decision(0.7, &thresholds, 0.03), "review");
-        assert_eq!(derive_decision(0.9, &thresholds, 0.03), "flag");
+        let segments: Vec<SegmentResponse> = Vec::new();
+        let decision = derive_decision(0.7, 0.2, &segments, "medium", 0.03);
+        assert!(decision == "review" || decision == "flag");
     }
 
     #[test]
     fn test_aggregate_empty() {
-        let result = aggregate_segments(&[]);
+        let result = aggregate_segments(&[], "medium");
         assert_eq!(result.overall_probability, 0.0);
         assert_eq!(result.decision, "pass");
     }

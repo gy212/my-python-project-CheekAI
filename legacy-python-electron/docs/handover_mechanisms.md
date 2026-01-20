@@ -32,8 +32,29 @@
 - `computeStylometryMetrics`：词汇多样性(TTR)、平均句长、功能词密度、标点密度、重复率、n-gram 重复率等。
 - `estimateTokens`：将中文逐字计为 token，避免整段当 1 个。
 - `_score_segment`：启发式结合 stylometry + 粗略困惑度得出 `aiProbability`。
-- `_run_llm_judgment`：把每段指标打包为 JSON 交给 GLM 判别，返回 prob 与本地 0.7/0.3 融合；若全部失败则抛错。
+- `_run_llm_judgment`：先做文档概况（教育部学科门类/一级学科/论文类型/摘要/写作约定），再把“文档概况 + 相邻段落上下文（仅参考，不判定） + 当前段落”送入 LLM 判别，输出 prob/confidence/uncertainty + signals，并与本地启发式做融合。
 - 聚合：`_contrast_sharpen_segments` 对比度强化，`aggregateSegments` 汇总概率/置信度，`deriveDecision` 输出结论。
+LLM 证据维度（signals.id）：
+- template_like：模板化表达/固定句式
+- low_specificity：抽象泛化、缺少可验证细节
+- uniform_structure：段落节奏/结构过于均匀
+- high_repetition：重复/近似句式/高 n-gram
+- weak_human_trace：缺少个人经历、过程、时间地点等痕迹
+- logical_leaps：论证跳跃、过度总结、前后衔接薄弱
+- human_detail：反证，具体经历/细节/可验证信息
+- stylistic_variance：反证，风格波动/个性化表达
+证据展示：
+- UI 不再截断 Top2，按证据强度排序后全量展示。
+文档概况输出：
+- category：学科门类（教育部学科目录：哲学、经济学、法学、教育学、文学、历史学、理学、工学、农学、医学、军事学、管理学、艺术学、交叉学科）
+- discipline：一级学科（教育部学科目录标准名称，无法判断填“交叉学科”）
+- subfield：二级学科/研究方向（可选）
+- paperType：论文类型（不限）
+- summary：一句话摘要（≤40字）
+- conventions：写作约定/文体特征（3-6条）
+灵敏度策略：
+- 中：偏少误判，降低 LLM 融合权重并提高冲突惩罚。
+- 高：偏高召回，提高 LLM 融合权重并放宽红区门槛。
 
 ## 配置与密钥
 - 配置由 `backend/config_store.py` 持久化至 JSON，接口 `/api/config/file`。

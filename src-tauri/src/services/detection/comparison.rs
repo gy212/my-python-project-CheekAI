@@ -49,9 +49,9 @@ pub fn compare_dual_mode_results(
 
     // Calculate overall probability difference
     let para_avg: f64 =
-        para_segments.iter().map(|s| s.ai_probability).sum::<f64>() / para_segments.len() as f64;
+        para_segments.iter().map(|s| s.raw_probability).sum::<f64>() / para_segments.len() as f64;
     let sent_avg: f64 =
-        sent_segments.iter().map(|s| s.ai_probability).sum::<f64>() / sent_segments.len() as f64;
+        sent_segments.iter().map(|s| s.raw_probability).sum::<f64>() / sent_segments.len() as f64;
     let probability_diff = (para_avg - sent_avg).abs();
 
     // Find divergent regions
@@ -62,12 +62,12 @@ pub fn compare_dual_mode_results(
     for p_seg in para_segments {
         let p_start = p_seg.offsets.start;
         let p_end = p_seg.offsets.end;
-        let p_prob = p_seg.ai_probability;
+        let p_prob = p_seg.raw_probability;
 
         for s_seg in sent_segments {
             let s_start = s_seg.offsets.start;
             let s_end = s_seg.offsets.end;
-            let s_prob = s_seg.ai_probability;
+            let s_prob = s_seg.raw_probability;
 
             // Check for overlap
             let overlap_start = p_start.max(s_start);
@@ -138,8 +138,10 @@ mod tests {
             chunk_id: 0,
             language: "zh".to_string(),
             offsets: SegmentOffsets { start: 0, end },
-            ai_probability: 0.10,
+            raw_probability: 0.10,
             confidence: 0.8,
+            uncertainty: 0.2,
+            decision: "pass".to_string(),
             signals: SegmentSignals::default(),
             explanations: vec![],
         };
@@ -148,8 +150,10 @@ mod tests {
             chunk_id: 0,
             language: "zh".to_string(),
             offsets: SegmentOffsets { start: 0, end },
-            ai_probability: 0.90,
+            raw_probability: 0.90,
             confidence: 0.8,
+            uncertainty: 0.2,
+            decision: "flag".to_string(),
             signals: SegmentSignals::default(),
             explanations: vec![],
         };

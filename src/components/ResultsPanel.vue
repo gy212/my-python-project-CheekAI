@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { SegmentResponse, AggregationResponse, DualDetectionResult, FilterSummary, ParagraphCategory } from "@/types";
+import type {
+  SegmentResponse,
+  AggregationResponse,
+  DualDetectionResult,
+  FilterSummary,
+  ParagraphCategory,
+  DocumentProfile
+} from "@/types";
 
 const props = defineProps<{
   segments: SegmentResponse[];
@@ -10,6 +17,7 @@ const props = defineProps<{
   overallProbability: string;
   overallDecision: string;
   originalText: string;
+  documentProfile?: DocumentProfile | null;
   filterSummary?: FilterSummary;
 }>();
 
@@ -33,9 +41,54 @@ const selectedSegmentText = computed(() => {
   return decoder.decode(slice);
 });
 
+const evidenceLabels: Record<string, string> = {
+  template_like: "模板化表达",
+  low_specificity: "低具体度",
+  uniform_structure: "结构过均匀",
+  high_repetition: "重复模式",
+  weak_human_trace: "缺少人类痕迹",
+  logical_leaps: "逻辑跳跃",
+  human_detail: "人类细节",
+  stylistic_variance: "风格波动",
+};
+
+const selectedSegmentEvidence = computed(() => {
+  if (selectedSegmentId.value === null) return [];
+  const seg = props.segments.find(s => s.chunkId === selectedSegmentId.value);
+  if (!seg) return [];
+  const evidence = seg.signals?.llmJudgment?.evidence ?? [];
+  return [...evidence]
+    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
+});
+
+const documentProfileValidity = computed(() => {
+  const profile = props.documentProfile;
+  if (!profile?.validity) return "";
+  switch (profile.validity) {
+    case "valid": return "画像已对齐";
+    case "partial": return "画像部分对齐";
+    case "invalid": return "画像未对齐";
+    default: return "";
+  }
+});
+
 const filteredItems = computed(() => {
   if (!props.filterSummary) return [];
   return props.filterSummary.classifications.filter(c => c.category !== 'body');
+});
+
+const documentCategoryLabel = computed(() => {
+  const profile = props.documentProfile;
+  if (!profile) return "";
+  const parts = [profile.category, profile.discipline, profile.subfield]
+    .map(val => val?.trim())
+    .filter((val): val is string => Boolean(val));
+  const base = parts.join("·");
+  const paperType = profile.paperType?.trim();
+  if (paperType) {
+    return base ? `${base}（${paperType}）` : paperType;
+  }
+  return base;
 });
 
 function selectSegment(chunkId: number) {
@@ -72,10 +125,32 @@ function getDecisionText(decision: string) {
   }
 }
 
+function getSegmentDecisionClass(decision?: string) {
+  switch (decision) {
+    case "pass": return "segment-pass";
+    case "review": return "segment-review";
+    case "flag": return "segment-flag";
+    default: return "";
+  }
+}
+
+function getEvidenceLabel(id: string) {
+  return evidenceLabels[id] || id;
+}
+
+function formatEvidenceScore(score: number) {
+  const formatted = score.toFixed(2);
+  return score >= 0 ? `+${formatted}` : formatted;
+}
+
 function getProbabilityClass(prob: number) {
   if (prob <= 0.30) return "prob-low";      // ≤30% 绿色
   if (prob < 0.70) return "prob-medium";    // 30-70% 黄色
   return "prob-high";                        // ≥70% 红色
+}
+
+function getRawProbability(seg: SegmentResponse) {
+  return seg.rawProbability ?? seg.aiProbability ?? 0;
 }
 </script>
 
@@ -98,7 +173,7 @@ function getProbabilityClass(prob: number) {
       <div v-if="aggregation" class="batch-summary" style="margin-bottom: 20px;">
         <div class="metrics">
           <div class="metric">
-            <span class="metric-label">整体概率</span>
+            <span class="metric-label">风险概率</span>
             <span class="metric-value" :class="getProbabilityClass(aggregation.overallProbability)">{{ overallProbability }}%</span>
           </div>
           <div class="metric">
@@ -110,6 +185,20 @@ function getProbabilityClass(prob: number) {
             <span class="metric-value">{{ (aggregation.overallConfidence * 100).toFixed(1) }}%</span>
           </div>
         </div>
+        <div v-if="documentProfile" class="doc-profile">
+          <div class="doc-profile-row">
+            <span class="doc-profile-label">论文类别</span>
+            <span class="doc-profile-value">{{ documentCategoryLabel || documentProfile.category }}</span>
+          </div>
+          <div class="doc-profile-row">
+            <span class="doc-profile-label">一句话摘要</span>
+            <span class="doc-profile-value">{{ documentProfile.summary }}</span>
+          </div>
+          <div v-if="documentProfileValidity" class="doc-profile-row">
+            <span class="doc-profile-label">画像状态</span>
+            <span class="doc-profile-value">{{ documentProfileValidity }}</span>
+          </div>
+        </div>
       </div>
 
       <div id="segments" class="segments-grid">
@@ -117,13 +206,17 @@ function getProbabilityClass(prob: number) {
           v-for="seg in segments"
           :key="seg.chunkId"
           class="segment-card node"
-          :class="[getProbabilityClass(seg.aiProbability), { 'segment-selected': selectedSegmentId === seg.chunkId }]"
+          :class="[getSegmentDecisionClass(seg.decision), { 'segment-selected': selectedSegmentId === seg.chunkId }]"
           @click="selectSegment(seg.chunkId)"
         >
           <div class="segment-header">段落 {{ seg.chunkId + 1 }}</div>
           <div class="row" style="margin-top:8px; justify-content: space-between;">
-            <span>概率: {{ (seg.aiProbability * 100).toFixed(1) }}%</span>
+            <span>原始概率: {{ (getRawProbability(seg) * 100).toFixed(1) }}%</span>
+            <span :class="getDecisionClass(seg.decision || '')">{{ getDecisionText(seg.decision || '') }}</span>
+          </div>
+          <div class="row" style="margin-top:6px; justify-content: space-between;">
             <span>置信度: {{ (seg.confidence * 100).toFixed(1) }}%</span>
+            <span>不确定度: {{ ((seg.uncertainty ?? 0) * 100).toFixed(1) }}%</span>
           </div>
         </div>
         <div v-if="!hasResult" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-muted);">
@@ -137,7 +230,28 @@ function getProbabilityClass(prob: number) {
           <span>段落 {{ selectedSegmentId! + 1 }} 原文</span>
           <button class="btn-close" @click="selectedSegmentId = null">×</button>
         </div>
+        <div class="segment-context-note">相邻两段仅作上下文参考，不参与检测</div>
         <div class="segment-content-text">{{ selectedSegmentText }}</div>
+        <div class="segment-evidence">
+          <div class="segment-evidence-title">检测证据</div>
+          <div v-if="selectedSegmentEvidence.length" class="segment-evidence-list">
+            <div
+              v-for="item in selectedSegmentEvidence"
+              :key="item.id + item.evidence"
+              class="segment-evidence-item"
+            >
+              <span class="segment-evidence-label">{{ getEvidenceLabel(item.id) }}</span>
+              <span
+                class="segment-evidence-score"
+                :class="item.score >= 0 ? 'evidence-ai' : 'evidence-human'"
+              >
+                {{ formatEvidenceScore(item.score) }}
+              </span>
+              <span class="segment-evidence-text">{{ item.evidence }}</span>
+            </div>
+          </div>
+          <div v-else class="segment-evidence-empty">暂无证据</div>
+        </div>
       </div>
     </article>
 
@@ -260,6 +374,33 @@ function getProbabilityClass(prob: number) {
   margin-top: 16px;
 }
 
+.doc-profile {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  display: grid;
+  gap: 8px;
+}
+
+.doc-profile-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: var(--font-sm);
+  color: var(--text-dark);
+}
+
+.doc-profile-label {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.doc-profile-value {
+  flex: 1;
+}
+
 .metric {
   border-radius: var(--radius-sm);
   padding: 12px 14px;
@@ -319,6 +460,22 @@ function getProbabilityClass(prob: number) {
 .segment-card:active {
   transform: translate(1px, 1px);
   box-shadow: 1px 1px 0px var(--border-dark);
+}
+
+/* Segment decision classes */
+.segment-pass {
+  border-left: 4px solid var(--success);
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.segment-review {
+  border-left: 4px solid var(--warning);
+  background: rgba(234, 179, 8, 0.15);
+}
+
+.segment-flag {
+  border-left: 4px solid var(--danger);
+  background: rgba(225, 97, 98, 0.15);
 }
 
 /* Decision classes */
@@ -417,6 +574,12 @@ function getProbabilityClass(prob: number) {
   color: var(--text-dark);
 }
 
+.segment-context-note {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
 .btn-close {
   background: transparent;
   border: none;
@@ -439,6 +602,62 @@ function getProbabilityClass(prob: number) {
   line-height: 1.6;
   max-height: 300px;
   overflow-y: auto;
+}
+
+.segment-evidence {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.segment-evidence-title {
+  font-weight: 700;
+  font-size: var(--font-sm);
+  color: var(--text-dark);
+  margin-bottom: 8px;
+}
+
+.segment-evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.segment-evidence-item {
+  display: flex;
+  gap: 8px;
+  font-size: var(--font-xs);
+  color: var(--text-dark);
+  align-items: flex-start;
+}
+
+.segment-evidence-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.segment-evidence-score {
+  font-weight: 700;
+  min-width: 48px;
+  text-align: right;
+}
+
+.segment-evidence-text {
+  flex: 1;
+  color: var(--text-dark);
+}
+
+.segment-evidence-empty {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.evidence-ai {
+  color: var(--danger);
+}
+
+.evidence-human {
+  color: var(--success);
 }
 
 /* Filtered content styles */

@@ -10,8 +10,11 @@ use thiserror::Error;
 
 const GLM_DEFAULT_URL: &str = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const DEEPSEEK_DEFAULT_URL: &str = "https://api.deepseek.com/chat/completions";
-const ANTHROPIC_DEFAULT_URL: &str = "https://crs.itssx.com/api/v1/messages";
-const OPENAI_RESPONSES_URL: &str = "https://ai.itssx.com/openai/responses";
+// Default Claude/Anthropic relay endpoint (can be overridden via `ANTHROPIC_API_URL`).
+// Note: this provider expects an Anthropic-compatible Messages API endpoint.
+const ANTHROPIC_DEFAULT_URL: &str = "https://nexus.itssx.com/api/claude_code/max200cc/v1/messages";
+// OpenAI-compatible "Responses" relay base URL (the client will normalize to an actual endpoint).
+const OPENAI_RESPONSES_URL: &str = "https://nexus.itssx.com/api/codex/codex";
 const GEMINI_DEFAULT_URL: &str = "https://ai.itssx.com/api/v1/chat/completions";
 
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.2";
@@ -40,6 +43,28 @@ fn clean_api_key(raw: &str) -> String {
 fn is_official_anthropic_url(url: &str) -> bool {
     // Keep this intentionally simple to avoid pulling in a URL parsing dependency.
     url.contains("api.anthropic.com")
+}
+
+fn normalize_anthropic_messages_url(url: &str) -> String {
+    // Accept either a full Messages endpoint (…/v1/messages) or a base URL.
+    // Many relays expose a base prefix and expect the caller to append `/v1/messages`.
+    let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.contains("/messages") {
+        trimmed.to_string()
+    } else {
+        format!("{}/v1/messages", trimmed)
+    }
+}
+
+fn normalize_openai_responses_url(url: &str) -> String {
+    // Accept either a full endpoint (…/responses, …/v1/responses, …/chat/completions) or a base URL.
+    let trimmed = url.trim().trim_end_matches('/');
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("/responses") || lower.contains("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{}/responses", trimmed)
+    }
 }
 
 #[derive(Error, Debug)]
@@ -445,18 +470,19 @@ impl ProviderClient {
             }],
         };
 
+        let url = normalize_anthropic_messages_url(url);
         let start = Instant::now();
         let api_key = clean_api_key(api_key);
 
         let mut req = self
             .client
-            .post(url)
+            .post(&url)
             .header("Content-Type", "application/json")
             .json(&request);
 
         // Official Anthropic requires `x-api-key`. Many relays (including the default itssx
         // endpoint in this repo) expect `Authorization: Bearer ...`.
-        if is_official_anthropic_url(url) {
+        if is_official_anthropic_url(&url) {
             req = req
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2024-10-22");
@@ -563,12 +589,13 @@ impl ProviderClient {
             }]
         });
 
+        let url = normalize_openai_responses_url(url);
         let start = Instant::now();
         let api_key = clean_api_key(api_key);
 
         let response = self
             .client
-            .post(url)
+            .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request)

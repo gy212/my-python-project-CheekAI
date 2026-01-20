@@ -5,13 +5,15 @@
 // for continuous, non-discrete probability outputs.
 
 use crate::models::{
-    SegmentOffsets, SegmentResponse, SegmentSignals,
-    SignalLLMJudgment, SignalPerplexity, SignalStylometry,
+    DocumentProfile, SegmentOffsets, SegmentResponse, SegmentSignals, SignalLLMJudgment,
+    SignalPerplexity, SignalStylometry,
 };
 use crate::services::text_processor::compute_stylometry;
+use super::subject_catalog::{is_academic_profile, profile_validity, ProfileValidity};
 use regex::Regex;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 
 // ============================================================================
 // Soft threshold functions for continuous scoring
@@ -54,6 +56,69 @@ fn deterministic_noise(text: &str, seed: u64) -> f64 {
     ((hash % 10000) as f64 / 10000.0) - 0.5
 }
 
+fn profile_strength(profile: Option<&DocumentProfile>) -> f64 {
+    let Some(profile) = profile else {
+        return 0.0;
+    };
+    if !is_academic_profile(profile) {
+        return 0.0;
+    }
+    match profile_validity(profile) {
+        ProfileValidity::Valid => 1.0,
+        ProfileValidity::Partial => 0.6,
+        ProfileValidity::Invalid => 0.0,
+    }
+}
+
+fn is_cjk_language(language: &str) -> bool {
+    let lang = language.trim().to_ascii_lowercase();
+    lang.starts_with("zh") || lang.starts_with("ja") || lang.starts_with("ko")
+}
+
+fn citation_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(\[[0-9]{1,3}\])|(\([A-Za-z][A-Za-z\s\.-]+,\s*\d{4}[a-z]?\))")
+            .expect("citation regex")
+    })
+}
+
+fn section_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(摘要|引言|绪论|方法|结果|讨论|结论|致谢|参考文献|Abstract|Introduction|Methods?|Results?|Discussion|Conclusion|Acknowledg(e)?ments?|References?)",
+        )
+        .expect("section regex")
+    })
+}
+
+fn figure_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)(图\s?\d+|表\s?\d+|figure\s?\d+|table\s?\d+|equation\s?\(?\d+\)?)")
+            .expect("figure regex")
+    })
+}
+
+fn academic_anchor_strength(text: &str) -> f64 {
+    let mut strength: f64 = 0.0;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0.0;
+    }
+    if citation_re().is_match(trimmed) || trimmed.contains("et al.") || trimmed.contains("DOI") || trimmed.contains("doi") {
+        strength += 0.4;
+    }
+    if section_re().is_match(trimmed) {
+        strength += 0.3;
+    }
+    if figure_re().is_match(trimmed) {
+        strength += 0.3;
+    }
+    strength.min(1.0)
+}
+
 /// Build segments from text blocks
 pub fn build_segments(
     text: &str,
@@ -62,12 +127,31 @@ pub fn build_segments(
     use_perplexity: bool,
     use_stylometry: bool,
 ) -> Vec<SegmentResponse> {
+    build_segments_with_profile(
+        text,
+        language,
+        blocks,
+        use_perplexity,
+        use_stylometry,
+        None,
+    )
+}
+
+/// Build segments from text blocks with optional document profile tuning
+pub fn build_segments_with_profile(
+    text: &str,
+    language: &str,
+    blocks: &[crate::services::text_processor::TextBlock],
+    use_perplexity: bool,
+    use_stylometry: bool,
+    doc_profile: Option<&DocumentProfile>,
+) -> Vec<SegmentResponse> {
     blocks
         .iter()
         .filter(|b| b.need_detect)
         .enumerate()
         .map(|(idx, block)| {
-            make_segment(
+            make_segment_with_profile(
                 idx as i32,
                 language,
                 block.start,
@@ -75,6 +159,7 @@ pub fn build_segments(
                 &text[block.start as usize..block.end as usize],
                 use_perplexity,
                 use_stylometry,
+                doc_profile,
             )
         })
         .collect()
@@ -89,6 +174,29 @@ pub fn make_segment(
     text: &str,
     use_perplexity: bool,
     use_stylometry: bool,
+) -> SegmentResponse {
+    make_segment_with_profile(
+        chunk_id,
+        language,
+        start,
+        end,
+        text,
+        use_perplexity,
+        use_stylometry,
+        None,
+    )
+}
+
+/// Create a segment response with heuristic scoring and optional profile tuning
+pub fn make_segment_with_profile(
+    chunk_id: i32,
+    language: &str,
+    start: i32,
+    end: i32,
+    text: &str,
+    use_perplexity: bool,
+    use_stylometry: bool,
+    doc_profile: Option<&DocumentProfile>,
 ) -> SegmentResponse {
     let (stylometry, ngram_repeat_rate) = if use_stylometry {
         let metrics = compute_stylometry(text);
@@ -119,18 +227,23 @@ pub fn make_segment(
     };
 
     // Calculate AI probability using continuous soft-threshold algorithm
-    let (ai_probability, explanations) = score_segment_continuous(&stylometry, ngram_repeat_rate, ppl, text);
+    let is_cjk = is_cjk_language(language);
+    let (raw_probability, explanations) =
+        score_segment_continuous(&stylometry, ngram_repeat_rate, ppl, text, doc_profile, is_cjk);
 
     // Legacy confidence formula: 0.55 + min(0.35, len(text)/1800), capped at 0.95
     let text_len = text.chars().count() as f64;
     let confidence = (0.55 + (text_len / 1800.0).min(0.35)).min(0.95);
+    let uncertainty = (1.0 - confidence).clamp(0.05, 0.9);
 
     SegmentResponse {
         chunk_id,
         language: language.to_string(),
         offsets: SegmentOffsets { start, end },
-        ai_probability,
+        raw_probability,
         confidence,
+        uncertainty,
+        decision: "pass".to_string(),
         signals: SegmentSignals {
             llm_judgment: SignalLLMJudgment::default(),
             perplexity,
@@ -146,12 +259,14 @@ pub fn make_segment(
 // ============================================================================
 
 /// Score segment using continuous soft-threshold algorithm
-/// Returns (ai_probability, explanations)
+/// Returns (raw_probability, explanations)
 fn score_segment_continuous(
     stylometry: &SignalStylometry,
     ngram_repeat_rate: f64,
     ppl: Option<f64>,
     text: &str,
+    doc_profile: Option<&DocumentProfile>,
+    is_cjk: bool,
 ) -> (f64, Vec<String>) {
     let mut explanations: Vec<String> = Vec::new();
 
@@ -162,6 +277,31 @@ fn score_segment_continuous(
     let rep = stylometry.repeat_ratio.unwrap_or(0.0);
     let ngram = ngram_repeat_rate;
     let avg_len = stylometry.avg_sentence_len;
+    let academic_strength = profile_strength(doc_profile);
+    // CJK stylometry is character-based; use gentler thresholds/weights to avoid AI bias.
+    let (ttr_low_center, ttr_low_k, ttr_high_center, ttr_high_k) = if is_cjk {
+        (0.46, 0.08, 0.70, 0.06)
+    } else {
+        (0.58, 0.08, 0.78, 0.06)
+    };
+    let (rep_center, rep_k) = if is_cjk { (0.26, 0.07) } else { (0.18, 0.06) };
+    let (ngram_center, ngram_k) = if is_cjk { (0.14, 0.05) } else { (0.10, 0.04) };
+    let (len_short_center, len_short_k, len_long_center, len_long_k) = if is_cjk {
+        (22.0, 8.0, 90.0, 22.0)
+    } else {
+        (35.0, 10.0, 120.0, 25.0)
+    };
+    let (ppl_low_center, ppl_low_k, ppl_high_center, ppl_high_k) = if is_cjk {
+        (75.0, 18.0, 180.0, 28.0)
+    } else {
+        (85.0, 20.0, 200.0, 30.0)
+    };
+    let ttr_low_weight = (1.0 - 0.30 * academic_strength) * if is_cjk { 0.85 } else { 1.0 };
+    let repeat_weight = (1.0 - 0.40 * academic_strength) * if is_cjk { 0.75 } else { 1.0 };
+    let ngram_weight = (1.0 - 0.40 * academic_strength) * if is_cjk { 0.75 } else { 1.0 };
+    let ppl_weight = (1.0 - 0.40 * academic_strength) * if is_cjk { 0.85 } else { 1.0 };
+    let ai_anchor_weight = (1.0 - 0.35 * academic_strength) * if is_cjk { 0.9 } else { 1.0 };
+    let len_weight = if is_cjk { 0.85 } else { 1.0 };
 
     // ========================================================================
     // Feature contributions using soft thresholds
@@ -171,8 +311,8 @@ fn score_segment_continuous(
     // 1. TTR (Type-Token Ratio) - lexical diversity
     // Low TTR suggests AI (more template-like)
     // sigmoid(ttr; center=0.58, k=0.08) gives smooth transition
-    let ttr_low_contrib = sigmoid(ttr, 0.58, 0.08) * 1.2;  // max +1.2 logit
-    let ttr_high_contrib = sigmoid_inv(ttr, 0.78, 0.06) * (-0.9);  // max -0.9 logit
+    let ttr_low_contrib = sigmoid(ttr, ttr_low_center, ttr_low_k) * 1.2 * ttr_low_weight;  // max +1.2 logit
+    let ttr_high_contrib = sigmoid_inv(ttr, ttr_high_center, ttr_high_k) * (-0.9);  // max -0.9 logit
     let ttr_contrib = ttr_low_contrib + ttr_high_contrib;
     logit += ttr_contrib;
     if ttr_contrib.abs() > 0.3 {
@@ -181,7 +321,7 @@ fn score_segment_continuous(
 
     // 2. Repeat ratio - word repetition
     // High repeat suggests AI
-    let rep_contrib = sigmoid_inv(rep, 0.18, 0.06) * 1.0;  // max +1.0 logit
+    let rep_contrib = sigmoid_inv(rep, rep_center, rep_k) * 1.0 * repeat_weight;  // max +1.0 logit
     logit += rep_contrib;
     if rep_contrib > 0.3 {
         explanations.push(format!("repeat={:.3} contrib={:.2}", rep, rep_contrib));
@@ -189,7 +329,7 @@ fn score_segment_continuous(
 
     // 3. N-gram repeat rate
     // High ngram repeat suggests AI
-    let ngram_contrib = sigmoid_inv(ngram, 0.10, 0.04) * 1.1;  // max +1.1 logit
+    let ngram_contrib = sigmoid_inv(ngram, ngram_center, ngram_k) * 1.1 * ngram_weight;  // max +1.1 logit
     logit += ngram_contrib;
     if ngram_contrib > 0.3 {
         explanations.push(format!("ngram={:.3} contrib={:.2}", ngram, ngram_contrib));
@@ -198,8 +338,8 @@ fn score_segment_continuous(
     // 4. Average sentence length - U-shaped penalty
     // Very short or very long sentences can indicate AI
     // Optimal range: 40-100 chars
-    let len_short_penalty = sigmoid(avg_len, 35.0, 10.0) * 0.3;  // penalty for short
-    let len_long_penalty = sigmoid_inv(avg_len, 120.0, 25.0) * 0.4;  // penalty for long
+    let len_short_penalty = sigmoid(avg_len, len_short_center, len_short_k) * 0.3 * len_weight;  // penalty for short
+    let len_long_penalty = sigmoid_inv(avg_len, len_long_center, len_long_k) * 0.4 * len_weight;  // penalty for long
     let len_contrib = len_short_penalty + len_long_penalty;
     logit += len_contrib;
     if len_contrib.abs() > 0.15 {
@@ -210,8 +350,8 @@ fn score_segment_continuous(
     // Low perplexity suggests AI (more predictable)
     if let Some(ppl_val) = ppl {
         // sigmoid centered at 100, with smooth transition
-        let ppl_low_contrib = sigmoid(ppl_val, 85.0, 20.0) * 1.0;  // max +1.0 for low ppl
-        let ppl_high_contrib = sigmoid_inv(ppl_val, 200.0, 30.0) * (-0.6);  // max -0.6 for high ppl
+        let ppl_low_contrib = sigmoid(ppl_val, ppl_low_center, ppl_low_k) * 1.0 * ppl_weight;  // max +1.0 for low ppl
+        let ppl_high_contrib = sigmoid_inv(ppl_val, ppl_high_center, ppl_high_k) * (-0.6);  // max -0.6 for high ppl
         let ppl_contrib = ppl_low_contrib + ppl_high_contrib;
         logit += ppl_contrib;
         if ppl_contrib.abs() > 0.2 {
@@ -231,7 +371,7 @@ fn score_segment_continuous(
             (sigmoid_inv(rep, 0.15, 0.04) + sigmoid_inv(ngram, 0.10, 0.03)) / 2.0;  // high repeat
 
         if anchor_strength > 0.3 {
-            let anchor_contrib = anchor_strength * 1.5;  // strong positive contribution
+            let anchor_contrib = anchor_strength * 1.5 * ai_anchor_weight;  // strong positive contribution
             logit += anchor_contrib;
             explanations.push(format!("ai_anchor strength={:.2}", anchor_strength));
         }
@@ -249,6 +389,15 @@ fn score_segment_continuous(
             let human_contrib = human_strength * (-1.2);  // strong negative contribution
             logit += human_contrib;
             explanations.push(format!("human_anchor strength={:.2}", human_strength));
+        }
+    }
+
+    if academic_strength > 0.0 {
+        let anchor_strength = academic_anchor_strength(text) * academic_strength;
+        if anchor_strength > 0.0 {
+            let anchor_contrib = -0.45 * anchor_strength;
+            logit += anchor_contrib;
+            explanations.push(format!("academic_anchor strength={:.2}", anchor_strength));
         }
     }
 

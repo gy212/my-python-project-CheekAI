@@ -25,10 +25,18 @@ export const SENSITIVITY_OPTIONS: SensitivityOption[] = [
 ];
 
 // Detection Types
+export interface LlmEvidenceItem {
+  id: string;
+  score: number;
+  evidence: string;
+}
+
 export interface SegmentSignals {
-  llm_judgment: {
+  llmJudgment: {
     prob: number | null;
     models: string[];
+    uncertainty?: number | null;
+    evidence?: LlmEvidenceItem[];
   };
   perplexity: {
     ppl: number | null;
@@ -51,8 +59,12 @@ export interface SegmentResponse {
     start: number;
     end: number;
   };
-  aiProbability: number;
+  rawProbability: number;
+  /** Legacy alias for older payloads. */
+  aiProbability?: number;
   confidence: number;
+  uncertainty?: number;
+  decision?: string;
   signals: SegmentSignals;
   explanations: string[];
 }
@@ -66,6 +78,10 @@ export interface AggregationResponse {
     medium: number;
     high: number;
     veryHigh: number;
+  };
+  decisionThresholds: {
+    review: number;
+    flag: number;
   };
   rubricVersion: string;
   decision: string;
@@ -101,6 +117,7 @@ export interface DualDetectionResult {
   fusedAggregation?: AggregationResponse;
   /** Optional content filter summary (titles/TOC/references/etc.) */
   filterSummary?: FilterSummary;
+  documentProfile?: DocumentProfile | null;
 }
 
 // Content Filter Types
@@ -122,6 +139,16 @@ export interface FilterSummary {
   classifications: ParagraphClassification[];
 }
 
+export interface DocumentProfile {
+  category: string;
+  summary: string;
+  discipline?: string | null;
+  subfield?: string | null;
+  paperType?: string | null;
+  conventions?: string[];
+  validity?: string;
+}
+
 export interface DetectResponse {
   aggregation: AggregationResponse;
   segments: SegmentResponse[];
@@ -137,6 +164,7 @@ export interface DetectResponse {
   version: string;
   requestId: string;
   dualDetection: DualDetectionResult | null;
+  documentProfile?: DocumentProfile | null;
   filterSummary?: FilterSummary;
 }
 

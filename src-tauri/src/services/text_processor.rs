@@ -437,12 +437,12 @@ pub fn compute_stylometry(text: &str) -> StylometryMetrics {
     let unique_words: HashSet<&str> = words.iter().cloned().collect();
     let ttr = unique_words.len() as f64 / total_words as f64;
 
-    // Average sentence length (in chars, aligned with legacy Python implementation)
-    let sentences = split_sentences(text);
+    // Average sentence length (in chars); advanced splitter handles CJK without whitespace.
+    let sentences = split_sentences_advanced(text);
     let avg_sentence_len = if sentences.is_empty() {
         text.chars().count() as f64
     } else {
-        sentences.iter().map(|s| s.chars().count()).sum::<usize>() as f64 / sentences.len() as f64
+        sentences.iter().map(|s| s.text.chars().count()).sum::<usize>() as f64 / sentences.len() as f64
     };
 
     // Function word ratio (small Chinese set, legacy-compatible)
